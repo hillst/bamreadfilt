@@ -1,0 +1,7 @@
+[package]
+name = "bamreadfilt"
+version = "0.1.0"
+authors = ["Steven Hill <hill2steve@gmail.com>"]
+
+[dependencies]
+rust-htslib = "*"
