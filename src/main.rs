@@ -53,19 +53,12 @@ fn parse_bam(bamname: &str, vcf: &str){
      */
 
     use rust_htslib::bam;
-    use rust_htslib::bam::record::CigarString;
     use std::path::Path;
     let path = Path::new(bamname);
     let mut bam = bam::IndexedReader::from_path(path).ok().expect("Error opening bam.");
 
     let head = bam::Header::from_template(bam.header()); // wonder if i gotta clone dis;
     let mut out = bam::Writer::from_path("test/out.bam", &head).expect("Error opening bam for writing.");
-
-
-    let tid = 0;
-
-    let beg: u32 = 10000;
-    let end: u32 = 10075;
 
 
     // parse vcf -> vec
@@ -80,21 +73,33 @@ fn parse_bam(bamname: &str, vcf: &str){
 
     // should probably figure out how to turn these into tests
     println!("hello? guys?");
-    use rust_htslib::bam::record::Cigar;
     use rust_htslib::bam::Read;
 
 
-    let mut bamvcfrecord = BAMVCFRecord::new(&mut bam, vcf_list);
+    let bamvcfrecord = BAMVCFRecord::new(&mut bam, vcf_list);
 
     // we constructed bamvcfrecord to only allow things that contained variants!
-    for (i, (item, vcf)) in bamvcfrecord.enumerate() {
-        // all you need is read_pos (??? yay)
+    // but we need to designate a useful api for this
+
+
+    //DAMN this is fucking beautiful.
+    for (i, (item, _vcf, _pir)) in bamvcfrecord
+                                        .filter(| &(ref _i, _v, p)| { p > 10 && p < 150 }) //pir filter
+                                        .filter(| &(ref i, _v, p) | {                     //vbq filter
+                                            i.qual()[p] >= 20                        
+                                        })
+                                        .filter(| &(ref i, _v, _p)| { i.mapq() >= 40 })    //mapq filter
+                                        .filter(| &(ref i, _v, _p)| { bamreadfilt::mrbq(i) >= 30.0 }) //mrbq filter
+                                        .enumerate() 
+    {
+        // its just interesting to me that this is a filter!
+
         if i % 1000 == 0 {
             println!("{} reads processed.", i);
         }
-        let ref_pos = item.cigar().read_pos(vcf.pos, false, false);
         //ultimately we will still have to do soething fancy here.
-        out.write(&item).unwrap();
+        // also seems like this is a filter
+        out.write(&item).unwrap(); // writes filtered reads.
     }
 
 

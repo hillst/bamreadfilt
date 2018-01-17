@@ -33,7 +33,7 @@ impl Config {
     }
 }
 
-
+/// Simple structure for capturing a current VCF entry (removes the INFO field effectively)
 #[derive(Copy,Clone)]
 pub struct VCFRecord {
     pub chrm: u32,
@@ -43,6 +43,7 @@ pub struct VCFRecord {
 }
 
 impl VCFRecord {
+    ///  Constructs a new record, panics if the reference ID is invalid
     pub fn new(record: &bcf::Record) -> VCFRecord {
         let chrm = match record.rid(){
             Some(val) => val,
@@ -63,13 +64,13 @@ impl VCFRecord {
 
 }
 
-
+/// _bam: current location of the bam file descriptor
+/// _vcf: Underlying vector of VCF records
+/// vcf_head: Contains the current vcf entry to fetch records from
 pub struct BAMVCFRecord<'a> {
-    //something about lifetimes!!! how do we access our current 'thing'
     _bam: &'a mut bam::IndexedReader,
     _vcf: Vec<bcf::Record>, 
     vcf_head: Option< VCFRecord >, //lol why is this option again? because in the last instance we want to trash it?
-    _EOL: bool,
 }
 
 
@@ -78,20 +79,21 @@ impl <'a > BAMVCFRecord<'a> {
     //     no reads should be handled by the iterator, constructor should simply setup the start of our vcf
     // one: if there are no reads, get the next vcf entry and fetch reads (and check if they exist)
     // two: if there is a vcf entry and reads return the next read 
+
     pub fn new(bam_reader: &'a mut bam::IndexedReader, mut vcf_reader: Vec<bcf::Record>) -> BAMVCFRecord <'a> { // if i use a reference will i need a lifetime?
-        //get first vcf entry
-        //set iterator head using fetch
         let vcf_head = match vcf_reader.pop(){
             Some(entry) => VCFRecord::new(&entry),
             None => panic!("No entries in VCF vector."), // is this really necessary? it is nice to exit first..
         };
 
         bam_reader.fetch(vcf_head.chrm, vcf_head.pos, vcf_head.pos + 1);     //make sure this is right
-        BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head), _EOL: false }
+        BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head) }
     }
 
-
-    fn _advancevcf_head(&mut self) {
+    /// updates the structs vcf_head to be the next entry. Also updates the _bam file descriptor.
+    ///     We use this when the previous vcf_head has been exhausted (no more reads)
+    ///     If we have consumed our full iterator, there are no more entries and we should return None to our iterator. 
+    fn _advance_vcf_head(&mut self) {
         let new_head = match self._vcf.pop(){
             Some(entry) => {
                 let rid = match entry.rid(){
@@ -114,53 +116,34 @@ impl <'a > BAMVCFRecord<'a> {
 }
 
 
-fn _contains_variant(bam_read: &bam::record::Record, vcf: &VCFRecord) -> Option<u32> {
-    /// Returns the position in bam_read that contains vcf_entry. Otherwise returns None.
-
-    /*
-     * bam.pos, for entry (something?) in bam, walk matched bases until pos = vcf.pos, 
-     *   return if alt = vcf.alt, otherwise None
-     * vcf.pos
-     *
-     */ 
-
-
-    None
-
-}
-
-
 impl <'a> Iterator for BAMVCFRecord<'a> {
-    /// iterator that seeks through a bam in the order resolved by a vcf record
+    type Item = (bam::record::Record, VCFRecord, usize);
 
-
-    /*
-     * The next thing this piece of code needs to do is....
-     *      either figure out how to dervice copy/clone traits for bcf::record
-     *        or manually parse and create our own vcf struct (i personally like this option more since we want to use this stuff downstream)
-     */
-    type Item = (bam::record::Record, VCFRecord);
-
-    fn next(&mut self) -> Option<(bam::record::Record, VCFRecord)>{ //eventually we are going to make this a fancier struct
+    /// returns the current read (as a bam::record::Record), variant (as a VCFRecord), and position of the mutation in the read (usize).
+    fn next(&mut self) -> Option<(bam::record::Record, VCFRecord, usize)>{ //eventually we are going to make this a fancier struct
+        let include_softclips = false;
+        let include_dels = false;
         loop {
             match self.vcf_head {
                 None => return None,
                 Some(vcf_entry) => {
                     match self._bam.records().next() {
-                        None => { self._advancevcf_head(); },
+                        None => { self._advance_vcf_head(); },
                         Some(val) => { 
                             match val { 
                                     Ok(val) => {
                                         // we are denoting position in the read as pir
                                         // some option for including variants that would occur in softmasked regions.
-                                        let pir = match val.cigar().read_pos(vcf_entry.pos, false, false).expect("Error parsing cigar string"){
+                                        let pir = match val.cigar().read_pos(vcf_entry.pos, include_softclips, include_dels).expect("Error parsing cigar string"){
                                             Some(val) => val as usize,
-                                            //None means this read didnt have the annotated variant!
                                             None => {continue;}
                                         }; 
 
+                                        // lol this is our default filter, i wonder if we can apply this somewhere else
+                                        //      to be more idiomatic. for instance, if this our default filter, shouldnt it show up
+                                        //      with the other filters rather tahn inside the iterator?
                                         if val.seq()[pir] == vcf_entry.alt_b {
-                                            return Some((val, vcf_entry.clone())); 
+                                            return Some((val, vcf_entry.clone(), pir)); 
                                         } else{
                                             continue;
                                         }
@@ -173,6 +156,12 @@ impl <'a> Iterator for BAMVCFRecord<'a> {
             }
         }
     }
+}
+
+/// mrbq returns the mean base quality of the passed `record`
+pub fn mrbq(record: &bam::Record) -> f32 {
+    let res: u32 = record.qual().into_iter().map( |&x| x as u32 ).sum(); 
+    return (res as f32) / (record.qual().len() as f32)
 }
 
 
@@ -205,7 +194,7 @@ mod tests {
 
         //prep vcf
         use rust_htslib::bcf::Reader;
-        let vcf_path = Path::new("test/test.vcf");
+        let vcf_path = Path::new("test/test1k.vcf");
         let mut vcf_itr = Reader::from_path(vcf_path).expect("cannot open vcf"); //originally said .ok().unwrap() which seems straight stupid
         let mut vcf_list: Vec<rust_htslib::bcf::Record> = vec![];
         for entry in vcf_itr.records() {
@@ -216,17 +205,14 @@ mod tests {
         use rust_htslib::bam::record::Cigar;
         use rust_htslib::bam::Read;
         let mut bamvcfrecord = BAMVCFRecord::new(&mut bam, vcf_list);
-
+        let mut test = 0;
         b.iter( || {
             match bamvcfrecord.next(){
-                Some((item, vcf)) => {
-                    item.cigar().read_pos(vcf.pos, false, false)
+                Some((ref item, vcf, pir)) => {
+                    test += pir;
                 },
                 None => {return;},
             };
         });
-
-
     }
-
 }
