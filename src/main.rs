@@ -2,30 +2,17 @@ extern crate bamreadfilt;
 extern crate byteorder;
 extern crate rust_htslib;
 
-use std::env;
-use std::str;
-use std::process;
 use std::collections::HashSet;
 use bamreadfilt::Config;
 use bamreadfilt::tuple_to_csv;
 use bamreadfilt::BAMVCFRecord;
 
 fn main() {
-
-    //parse_bam().filter() ?
-    //parse_bam(config.bam, config.vcf, config.filters) ?
-    /*match args {
-            filter statistics => populate struct of before/after reads/sites for a set of filters (basically call before and after applying filters and keep running counts/vecs)
-            collect read stats => populate struct of read-specific features (VBQ, MAPQ, DUP, ..etc ie what are the metrics of this sample?)
-            filter reads => just filters reads without any stats (but why would you want this)
-            make records => build tfrecords from the filters.
-      }
-    */
     let config = Config::new();
-    parse_bam(config);
+    run(config);
 }
 
-fn parse_bam(config: Config){ 
+fn run(config: Config){ 
     /*
      * Accept a bamname, set of vcf sites and their alt-refs (just in a form that we can filter for quickly, maybe even a struct)
      *    returns an iterator of parsed bam entries that are contained in vcfinfo
@@ -81,6 +68,14 @@ fn parse_bam(config: Config){
                                             (_i, _v, p)
                                         })
                                         .filter(| &(ref _i, _v, p)| { p >= config.min_pir && p <= config.max_pir}) //pir filter
+                                        .filter(| &(ref i, _v, _p)| { 
+                                            if i.is_paired() {
+                                                i.insert_size().abs() as u32  >= config.min_frag && i.insert_size().abs() as u32 <= config.max_frag
+
+                                            } else {
+                                                true
+                                            }
+                                        }) //pir filter
                                         .filter(| &(ref i, _v, p) | {                     //vbq filter
                                             i.qual()[p] >= config.vbq
                                         })
@@ -99,23 +94,15 @@ fn parse_bam(config: Config){
         out.write(&item).unwrap(); // writes filtered reads.
     }
 
-    eprintln!("Number of sites before: {}, Number of sites after: {}", before_site_stats.len(), after_site_stats.len());
 
-
-    eprintln!("mrbq {:?} vbq {:?} mapq {:?} duplicate {:?} paired {:?}", before_stats.mrbq.finalize(), before_stats.vbq.finalize(), before_stats.mapq.finalize(), before_stats.duplicated.finalize(), before_stats.paired.finalize());
-    eprintln!("mrbq {:?} vbq {:?} mapq {:?} duplicate {:?} paired {:?}", after_stats.mrbq.finalize(), after_stats.vbq.finalize(), after_stats.mapq.finalize(), after_stats.duplicated.finalize(), after_stats.paired.finalize());
-    write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64);
+    write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
 }
 
-// probably want a result to type for if we ever error out.
-//  could be references and not moves/copies but we only do this once so whatever.
-//  need a way to include the before/after sites or something! maybe add it to the struct?
+//  probably should put the before/after sites somewhere proper.
+//  would be nice if we could write the config somewhere too! Then we would have a list of applied filters in addition to before/after stats.
 pub fn write_statistics(output_filename: &String, before_stats: bamreadfilt::SiteStats, after_stats: bamreadfilt::SiteStats, before_sites: u64, after_sites: u64) -> Result<(),std::io::Error> {
     use std::io::Write;
     use std::fs::File;
-
-    let test_unpack = (1.0, 2.0);
-
 
 
     let mut f = File::create(output_filename)?;
