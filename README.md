@@ -60,16 +60,12 @@ For instance, if a user wants to filter by variant base quality >= 20 and MAPQ >
 ./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20
 ```
 
-The result would be written to out.bam and stats.txt respectively. Unfortunately however, the resulting bam is not sorted (and not indexed!), to receive a sorted bam you can write to standard out!
-
-```bash
-./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20 --stdout | samtools sort - > out.sorted.bam
-```
+The result would be written to test/new_out.bam and stats.txt respectively. Unfortunately however, the resulting bam is not sorted (and not indexed!), to receive a sorted bam you can write to standard out with the --stdout flag. Unfortunately using this with samtools sort  **does not play work** with a limited amount of system memory. Avoid using --stdout to sort your result.
 
 While the tool works great for bam/vcf pairs, there is no way currently to process more than one bam at a time. This could lead to frustration when collecting statistics. Fortunately there is a flag for a custom statistics file!
 
 ```bash
-./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20 --stdout --stats mystats.txt | samtools sort - > out.sorted.bam
+./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20  --stats mystats.txt 
 ```
 
 Now results are written to mystats.txt instead of to the default stats.txt.
@@ -79,5 +75,5 @@ Now results are written to mystats.txt instead of to the default stats.txt.
 To use bamreadfilt with threads, simply add the -t argument specifying a number of threads. The filters are not distributed and we are *guaranteed* there is no race condition when computing the statistics.
 
 ```bash 
-./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20 --stdout -t 8 | samtools sort - > out.sorted.bam
+./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20  -t 8 
 ```
