@@ -9,7 +9,132 @@ use bamreadfilt::BAMVCFRecord;
 
 fn main() {
     let config = Config::new();
-    run(config);
+
+    let num_threads = config.num_threads;
+    if num_threads > 1 {
+        mscp_run(config, num_threads as usize);
+    } else{
+        run(config);
+    }
+}
+
+/// runs our config in a mscp setting. this also works for a single-threaded job (n_thread = 1).
+///     currently the only work that is 'parallel' is identifying reads which contain a specific variant. we should ultimately look to move the filters/stats there as well.
+///     this kind of job would be best if we had a server/receiver setup going on.
+///         it also seems like currently it just waits for everything to finish before trying to consume -- it would be better if it didnt block :)
+fn mscp_run(config: Config, n_threads: usize){
+    use std::thread;
+    use std::sync::mpsc;
+    use std::path::Path;
+    use rust_htslib::bcf::Reader;
+    use rust_htslib::bam::Read;
+    use rust_htslib::bam;
+    let bam_filename = config.bam_filename.clone();
+    
+    //TODO duplicated code
+    // parse vcf -> vec
+    let vcf_path = Path::new(&config.vcf_filename);
+    let mut vcf_itr = Reader::from_path(vcf_path).expect("cannot open vcf"); 
+
+    let path = Path::new(&bam_filename);//why is it only using move semantics lol
+    let bam = bam::IndexedReader::from_path(path).ok().expect("Error opening bam.");
+    let head = bam::Header::from_template(bam.header()); // wonder if i gotta clone dis;
+
+    let mut out = match config.use_stdout {
+        false => bam::Writer::from_path("test/new_out.bam", &head).expect("Error opening bam for writing."), 
+        true => bam::Writer::from_stdout(&head).expect("Error opening stdout for writing."),
+    };
+    
+    let mut before_stats = bamreadfilt::SiteStats::new();
+    let mut after_stats = bamreadfilt::SiteStats::new();
+
+    let mut before_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
+    let mut after_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
+
+
+
+    let mut vec_list: Vec<Vec<rust_htslib::bcf::Record>> = vec![];
+    for _ in 0..n_threads{
+        vec_list.push(vec![]);
+    }
+
+
+    for (i, entry) in vcf_itr.records().enumerate() {
+        // I'm almost certain we will want these to be continuous in memory or atleast adjacent
+        vec_list[i % n_threads].push(entry.ok().unwrap());
+    }
+
+    if vec_list.len() < n_threads {
+        panic!("Number of VCF entries < number of threads. Is this VCF okay?");
+    }
+
+    let mut handles = Vec::with_capacity(n_threads);
+
+    //THREADS start here.
+
+    let (tx, rx) = mpsc::channel();
+    for _ in 0..n_threads {
+        let vcf_list = vec_list.pop().unwrap();
+        let bam_filename = bam_filename.clone();
+        let tx = tx.clone();
+        handles.push(thread::spawn(move || {
+            let bamvcfrecord = BAMVCFRecord::new(&bam_filename, vcf_list);
+            for (item, _vcf, _pir) in bamvcfrecord
+            // we can alternatively have filters apply here.
+            {
+                tx.send((item, _vcf, _pir)).unwrap();
+            }
+        }));
+    }
+
+
+    // this part feels like something that is easy to modify and something we could bake into bamvcf iterator
+    let config = config.clone();
+    let consumer = thread::spawn(move || {
+        println!("consumer setup");
+        for (i, (item, _vcf, _pir)) in rx.iter()
+            .map(   | (_i, _v, p) | { 
+                before_stats.collect_stats_stream(&_i, &_v, p);
+                before_site_stats.insert(_v.clone());
+                (_i, _v, p)
+            })
+            .filter(| &(ref _i, _v, p)| { p >= config.min_pir && p <= config.max_pir}) //pir filter
+            .filter(| &(ref i, _v, _p)| { 
+                if i.is_paired() {
+                    i.insert_size().abs() as u32  >= config.min_frag && i.insert_size().abs() as u32 <= config.max_frag
+
+                } else {
+                    true
+                }
+            }) //pir filter
+            .filter(| &(ref i, _v, p) | {                     //vbq filter
+                i.qual()[p] >= config.vbq
+            })
+            .filter(| &(ref i, _v, _p)| { i.mapq() >= config.mapq })    //mapq filter
+            .filter(| &(ref i, _v, _p)| { bamreadfilt::mrbq(i) >= config.mrbq }) //mrbq filter
+            .map(   | (_i, _v, p) | { 
+                after_stats.collect_stats_stream(&_i, &_v, p);
+                after_site_stats.insert(_v.clone());
+                (_i, _v, p)
+            })
+            .enumerate() {
+
+            if config.verbose && i % 1000 == 0 {
+                eprintln!("{} reads processed.", i);
+            }
+            out.write(&item).unwrap(); // writes filtered reads.
+        }
+            
+        eprintln!("Done.");
+    });
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    drop(tx); // do not remove this or you WILL DEADLOCK
+    println!("receiver dropped");
+    consumer.join().unwrap();
+
 }
 
 fn run(config: Config){ 
@@ -28,13 +153,11 @@ fn run(config: Config){
     use rust_htslib::bcf::Reader;
     use rust_htslib::bam::Read;
 
-    let path = Path::new(&config.bam_filename);
-    let mut bam = bam::IndexedReader::from_path(path).ok().expect("Error opening bam.");
-
+    let bam_filename = config.bam_filename.clone();
+    //only used for building header
+    let path = Path::new(&bam_filename); //why is it only using move semantics lol
+    let bam = bam::IndexedReader::from_path(path).ok().expect("Error opening bam.");
     let head = bam::Header::from_template(bam.header()); // wonder if i gotta clone dis;
-
-    //need something here to determine between stdout (i think we can get a file handle for that) and an actual path.
-    //  ideally our config struct will handle this.
 
     let mut out = match config.use_stdout {
         false => bam::Writer::from_path("test/new_out.bam", &head).expect("Error opening bam for writing."), 
@@ -47,11 +170,10 @@ fn run(config: Config){
     let mut vcf_list: Vec<rust_htslib::bcf::Record> = vec![];
     for entry in vcf_itr.records() {
         // TODO turn this into a match and explicitly handle failure cases (by exiting?)
-        //      I guess it just isnt clear to me how this fails.
         vcf_list.push(entry.ok().unwrap());
     }
 
-    let bamvcfrecord = BAMVCFRecord::new(&mut bam, vcf_list);
+    let bamvcfrecord = BAMVCFRecord::new(&bam_filename, vcf_list);
 
     let mut before_stats = bamreadfilt::SiteStats::new();
     let mut after_stats = bamreadfilt::SiteStats::new();
@@ -60,7 +182,6 @@ fn run(config: Config){
     let mut after_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
 
 
-    //DAMN this is fucking beautiful -- need to paramterize it though.
     for (i, (item, _vcf, _pir)) in bamvcfrecord
                                         .map(   | (_i, _v, p) | { 
                                             before_stats.collect_stats_stream(&_i, &_v, p);
@@ -93,7 +214,6 @@ fn run(config: Config){
         }
         out.write(&item).unwrap(); // writes filtered reads.
     }
-
 
     write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
 }

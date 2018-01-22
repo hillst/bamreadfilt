@@ -12,7 +12,7 @@ use rust_htslib::bam;
 use rust_htslib::bam::Read;
 use rust_htslib::bcf;
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct Config {
     pub verbose: bool,
     pub bam_filename: String , 
@@ -28,6 +28,7 @@ pub struct Config {
     pub bam_out_filename: String,
     pub min_frag: u32,
     pub max_frag: u32,
+    pub num_threads: u8,
 
 }
 
@@ -48,7 +49,9 @@ impl Config {
         let mut stats_before: bool = true;
         let mut stats_after: bool = true;
         let mut bam_out_filename = "out.bam".to_string(); 
-        let mut conf = Config { verbose, bam_filename, vcf_filename, mapq, vbq, mrbq, min_pir, max_pir, use_stdout, stats_before, stats_after, bam_out_filename, min_frag, max_frag };
+        let mut num_threads = 1;
+        let mut conf = Config { verbose, bam_filename, vcf_filename, mapq, vbq, mrbq, min_pir, max_pir, use_stdout, 
+                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads };
 
         {  // this block limits scope of borrows by ap.refer() method
             let mut ap = ArgumentParser::new();
@@ -97,6 +100,9 @@ impl Config {
             ap.refer(&mut conf.max_frag)
                 .add_option(&["--max_frag"], Store,
                 "Maximum position of the variant in the read to include the read.");
+            ap.refer(&mut conf.num_threads)
+                .add_option(&["--threads", "-t"], Store,
+                "Number of threads.");
             ap.parse_args_or_exit();
         }
         conf
@@ -109,7 +115,7 @@ impl Config {
 
 
 /// Simple structure for capturing a current VCF entry (removes the INFO field effectively)
-#[derive(Copy,Clone,PartialEq,Eq,Hash)]
+#[derive(Copy,Clone,PartialEq,Eq,Hash,Debug)]
 pub struct VCFRecord {
     pub chrm: u32,
     pub pos: u32,
@@ -142,28 +148,28 @@ impl VCFRecord {
 /// _bam: current location of the bam file descriptor
 /// _vcf: Underlying vector of VCF records
 /// vcf_head: Contains the current vcf entry to fetch records from
-pub struct BAMVCFRecord<'a> {
-    _bam: &'a mut bam::IndexedReader,
+pub struct BAMVCFRecord {
+    _bam: bam::IndexedReader,
     _vcf: Vec<bcf::Record>, 
     vcf_head: Option< VCFRecord >, //lol why is this option again? because in the last instance we want to trash it?
 }
 
 
-impl <'a > BAMVCFRecord<'a> {
+impl BAMVCFRecord {
     // two iteration rules
     //     no reads should be handled by the iterator, constructor should simply setup the start of our vcf
     // one: if there are no reads, get the next vcf entry and fetch reads (and check if they exist)
     // two: if there is a vcf entry and reads return the next read 
 
-    pub fn new(bam_reader: &'a mut bam::IndexedReader, mut vcf_reader: Vec<bcf::Record>) -> BAMVCFRecord <'a> { // if i use a reference will i need a lifetime?
+    pub fn new(bam_path: &str , mut vcf_reader: Vec<bcf::Record>) -> BAMVCFRecord {
         let vcf_head = match vcf_reader.pop(){
             Some(entry) => VCFRecord::new(&entry),
             None => panic!("No entries in VCF vector."), // is this really necessary? it is nice to exit first..
         };
-
+        let mut bam_reader = bam::IndexedReader::from_path(bam_path).ok().expect("Error opening bam.");
         bam_reader.fetch(vcf_head.chrm, vcf_head.pos, vcf_head.pos + 1).expect("Error fetching entry in bam -- check your bam for corruption.");     //make sure this is right
-               
         BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head) }
+
     }
 
     /// updates the structs vcf_head to be the next entry. Also updates the _bam file descriptor.
@@ -192,7 +198,7 @@ impl <'a > BAMVCFRecord<'a> {
 }
 
 
-impl <'a> Iterator for BAMVCFRecord<'a> {
+impl Iterator for BAMVCFRecord {
     type Item = (bam::record::Record, VCFRecord, usize);
 
     /// returns the current read (as a bam::record::Record), variant (as a VCFRecord), and position of the mutation in the read (usize).
