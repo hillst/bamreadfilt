@@ -126,7 +126,8 @@ fn mscp_run(config: Config, n_threads: usize){
         }
             
         eprintln!("Done.");
-        write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+        write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+        //write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
     });
 
     for handle in handles {

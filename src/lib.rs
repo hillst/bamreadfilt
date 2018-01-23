@@ -29,29 +29,31 @@ pub struct Config {
     pub min_frag: u32,
     pub max_frag: u32,
     pub num_threads: u8,
+    pub stats: String,
 
 }
 
 impl Config {
     pub fn new() -> Config {
 
-        let mut verbose = false;
-        let mut bam_filename = "".to_string();
-        let mut vcf_filename = "".to_string(); 
-        let mut mapq = 0;
-        let mut vbq = 0;
-        let mut mrbq = 0.;
-        let mut min_pir = 0;
-        let mut max_pir = 10000000;
-        let mut min_frag = 0;
-        let mut max_frag = 10000000;
-        let mut use_stdout: bool = false;
-        let mut stats_before: bool = true;
-        let mut stats_after: bool = true;
-        let mut bam_out_filename = "out.bam".to_string(); 
-        let mut num_threads = 1;
+        let verbose = false;
+        let bam_filename = "".to_string();
+        let vcf_filename = "".to_string(); 
+        let mapq = 0;
+        let vbq = 0;
+        let mrbq = 0.;
+        let min_pir = 0;
+        let max_pir = 10000000;
+        let min_frag = 0;
+        let max_frag = 10000000;
+        let use_stdout: bool = false;
+        let stats_before: bool = true;
+        let stats_after: bool = true;
+        let bam_out_filename = "out.bam".to_string(); 
+        let num_threads = 1;
+        let stats = "stats.txt".to_string();
         let mut conf = Config { verbose, bam_filename, vcf_filename, mapq, vbq, mrbq, min_pir, max_pir, use_stdout, 
-                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads };
+                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats };
 
         {  // this block limits scope of borrows by ap.refer() method
             let mut ap = ArgumentParser::new();
@@ -100,6 +102,9 @@ impl Config {
             ap.refer(&mut conf.max_frag)
                 .add_option(&["--max_frag"], Store,
                 "Maximum position of the variant in the read to include the read.");
+            ap.refer(&mut conf.stats)
+                .add_option(&["--stats"], Store,
+                "File where we would like to place statistics.");
             ap.refer(&mut conf.num_threads)
                 .add_option(&["--threads", "-t"], Store,
                 "Number of threads.");
@@ -202,7 +207,7 @@ impl Iterator for BAMVCFRecord {
     type Item = (bam::record::Record, VCFRecord, usize);
 
     /// returns the current read (as a bam::record::Record), variant (as a VCFRecord), and position of the mutation in the read (usize).
-    fn next(&mut self) -> Option<(bam::record::Record, VCFRecord, usize)>{ //eventually we are going to make this a fancier struct
+    fn next(&mut self) -> Option<(bam::record::Record, VCFRecord, usize)>{ // We should make this a struct or wrap it in a Box type to get a constant size.
         let include_softclips = false;
         let include_dels = false;
         loop {
