@@ -41,7 +41,7 @@ fn mscp_run(config: Config, n_threads: usize){
     let head = bam::Header::from_template(bam.header()); // wonder if i gotta clone dis;
 
     let mut out = match config.use_stdout {
-        false => bam::Writer::from_path("test/new_out.bam", &head).expect("Error opening bam for writing."), 
+        false => bam::Writer::from_path("new_out.bam", &head).expect("Error opening bam for writing."), 
         true => bam::Writer::from_stdout(&head).expect("Error opening stdout for writing."),
     };
     
@@ -126,6 +126,7 @@ fn mscp_run(config: Config, n_threads: usize){
         }
             
         eprintln!("Done.");
+        write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
     });
 
     for handle in handles {
@@ -160,7 +161,7 @@ fn run(config: Config){
     let head = bam::Header::from_template(bam.header()); // wonder if i gotta clone dis;
 
     let mut out = match config.use_stdout {
-        false => bam::Writer::from_path("test/new_out.bam", &head).expect("Error opening bam for writing."), 
+        false => bam::Writer::from_path("new_out.bam", &head).expect("Error opening bam for writing."), 
         true => bam::Writer::from_stdout(&head).expect("Error opening stdout for writing."),
     };
 
@@ -211,11 +212,16 @@ fn run(config: Config){
     {
         if config.verbose && i % 1000 == 0 {
             eprintln!("{} reads processed.", i);
+            //use std::mem::size_of;
+            
+            //println!( "size of {}", size_of::<(bam::record::Record, bamreadfilt::VCFRecord, usize)>() );
         }
         out.write(&item).unwrap(); // writes filtered reads.
     }
 
+    //write_statistics(&config.stats.to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
     write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+
 }
 
 //  probably should put the before/after sites somewhere proper.
