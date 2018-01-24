@@ -8,6 +8,7 @@ extern crate rust_htslib;
 extern crate argparse;
 
 use argparse::{ArgumentParser, StoreTrue, Store, StoreFalse};
+use std::collections::HashSet;
 use rust_htslib::bam;
 use rust_htslib::bam::Read;
 use rust_htslib::bcf;
@@ -35,7 +36,6 @@ pub struct Config {
 
 impl Config {
     pub fn new() -> Config {
-
         let verbose = false;
         let bam_filename = "".to_string();
         let vcf_filename = "".to_string(); 
@@ -157,6 +157,7 @@ pub struct BAMVCFRecord {
     _bam: bam::IndexedReader,
     _vcf: Vec<bcf::Record>, 
     vcf_head: Option< VCFRecord >, //lol why is this option again? because in the last instance we want to trash it?
+    read_tracker: UniqueReadTree,
 }
 
 
@@ -173,7 +174,7 @@ impl BAMVCFRecord {
         };
         let mut bam_reader = bam::IndexedReader::from_path(bam_path).ok().expect("Error opening bam.");
         bam_reader.fetch(vcf_head.chrm, vcf_head.pos, vcf_head.pos + 1).expect("Error fetching entry in bam -- check your bam for corruption.");     //make sure this is right
-        BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head) }
+        BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head), read_tracker: UniqueReadTree::new(200) }
 
     }
 
@@ -214,7 +215,8 @@ impl Iterator for BAMVCFRecord {
             match self.vcf_head {
                 None => return None,
                 Some(vcf_entry) => {
-                    match self._bam.records().next() {
+                    let next_record = self._bam.records().next();
+                    match next_record {
                         None => { self._advance_vcf_head(); },
                         Some(val) => { 
                             match val { 
@@ -225,15 +227,19 @@ impl Iterator for BAMVCFRecord {
                                             Some(val) => val as usize,
                                             None => { continue; }
                                         }; 
-
-                                        // lol this is our default filter, i wonder if we can apply this somewhere else
-                                        //      to be more idiomatic. for instance, if this our default filter, shouldnt it show up
-                                        //      with the other filters rather tahn inside the iterator?
-                                        if val.seq()[pir] == vcf_entry.alt_b {
-                                            return Some((val, vcf_entry.clone(), pir)); 
-                                        } else{
+                                       
+                                        let ur = UniqueRead::new(&val);
+                                        if self.read_tracker.contains(&ur) {
                                             continue;
+                                        } else if val.seq()[pir] != vcf_entry.alt_b {
+                                            continue;
+                                        } else{
+                                            self.read_tracker.insert(UniqueReadItem::UniqueRead(ur));
+                                            return Some((val, vcf_entry.clone(), pir)); 
                                         }
+
+
+
                                     }, //it may be wise to repack these with all relevant information in addition to bam
                                     Err(_) => panic!("Error reading bam, godspeed."),
                             }
@@ -382,9 +388,105 @@ impl RunningAverage {
 
 }
 
+#[derive(Clone,Eq,Hash,Debug,Ord,PartialEq,PartialOrd)]
+struct UniqueRead {
+    /// derived ords goes top to bottom, so by having pos first we basically say position is the most important thing for ordering, followed by qname and template position
+    ///     if a read is the same as another, this is irrelevant
+    ///     if a read has the same qname but has a different template position its teh read pair (and should have a different pos too)
+    ///     if neither of those are true, then the position is the most important thing to consider for ordering as we will be using this to keep a size restricted BTree.
+    chrm: i32,
+    pos: i32,
+    qname: String,
+    template_pos: bool,
+}
+
+impl UniqueRead {
+    fn new(item: &bam::Record) -> UniqueRead {
+        let qname: String = String::from_utf8((&item.qname()).to_vec()).unwrap();
+        UniqueRead{ chrm: item.tid(), pos: item.pos(), qname: qname, template_pos: item.is_first_in_template() }
+    }
+}
+
+/// use this type for switching between bams and unique reads (useful for mocking bams for instance)
+enum UniqueReadItem {
+    BamRecord(bam::Record),
+    UniqueRead(UniqueRead),
+}
+
+struct UniqueReadTree {
+    tree: std::collections::HashSet<UniqueRead>,
+    max_distance: i32,
+}
+
+impl UniqueReadTree {
+
+    //  I haven't come up with a failure case so
+    fn insert(&mut self, item: UniqueReadItem) {
+        let unique_read = match item {
+            UniqueReadItem::BamRecord(item) => {
+                let qname: String = String::from_utf8((&item.qname()).to_vec()).unwrap();
+                UniqueRead{ chrm: item.tid(), pos: item.pos(), qname: qname, template_pos: item.is_first_in_template() }
+            },
+            UniqueReadItem::UniqueRead(i) => i 
+        };
+
+        // there is certainly a faster way to do this, there should be an inner node that is not the smallest and < unique_read
+        //      there is another solution that involves updating once we hit a capacity doing the exact same thing! then we dont update
+        //      on every insertion, just on insertions where we have reached capacity although we would need to drop all elements in the tree < k somehow.
+        loop {
+            let smallest = match self.tree.iter().min() {
+                Some(val) => 
+                     val.clone(),
+                None =>  unique_read.clone(),
+            };
+            //this should be a loop!
+            if (unique_read.chrm == smallest.chrm) && ((unique_read.pos - smallest.pos ) <= self.max_distance ) {
+                break;
+            }
+            else {
+                self.tree.remove(&smallest); 
+            }
+        }
+
+        //now that the tree has been pruned we add our read.
+        self.tree.insert(unique_read);
+    }
+
+    /// constructor. choose max_distance to a size that is equal to readlength or the upper bound on read length.
+    fn new(max_distance: i32) -> UniqueReadTree {
+        return UniqueReadTree { tree: std::collections::HashSet::new(), max_distance: max_distance }
+    } 
+
+    fn iter(&self) -> std::collections::hash_set::Iter<UniqueRead> {
+        return self.tree.iter()
+    }
+
+    fn len(&self) -> usize {
+        return self.tree.len()
+    }
+
+    fn max(&self) -> Option<&UniqueRead> {
+        return self.tree.iter().max()
+    }
+
+    fn min(&self) -> Option<&UniqueRead> {
+        return self.tree.iter().min()
+    }
+    fn contains(&self, other: &UniqueRead ) -> bool {
+        return self.tree.contains(other)
+    }
+
+}
+
+
+//now we need a limited BTree type/function to handle this shit.
+//basically we want a BTree with a max capacity where we effectively drop shit that is < K 
+//      need to check the complexity of keepign this balanced
+//      need to check the max memory usage of this kind of method
+
+
 pub fn tuple_to_csv(tuple: (f64, f64)) -> String{
     format!("{},{}", tuple.0, tuple.1)
-
 }
 
 
@@ -395,6 +497,53 @@ mod tests {
     //      could/should just make sure we correctly get 'None' and panics when we should ?
     use super::*;
     use test::Bencher;
+
+    #[test]
+    fn unique_read_ord(){
+        let ur_first = UniqueRead { chrm: 1, pos: 151, qname: "ayylmao".to_string(), template_pos: true};
+        let ur_first_clone = UniqueRead { chrm: 1, pos: 151, qname: "ayylmao".to_string(), template_pos: true};
+        let ur_second = UniqueRead { chrm: 1, pos: 152, qname: "ayylmao_diff".to_string(), template_pos: true };
+        assert_ne!(ur_first, ur_second);
+        assert_eq!(ur_first, ur_first_clone);
+        assert_eq!(ur_first.cmp(&ur_second), std::cmp::Ordering::Less);
+        assert_eq!(ur_second.cmp(&ur_first), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn unique_read_bst_update(){
+        // not really a test. more just im working with it to figure out whats goig on.
+        let mut tree:  UniqueReadTree  = UniqueReadTree::new(200);
+        let ur_first = UniqueRead { chrm: 1, pos: 151, qname: "ayylmao".to_string(), template_pos: true};
+        let ur_first_clone = UniqueRead { chrm: 1, pos: 151, qname: "ayylmao".to_string(), template_pos: true};
+        let ur_first_pair = UniqueRead { chrm: 1, pos: 302, qname: "ayylmao".to_string(), template_pos: false};
+        let ur_second = UniqueRead { chrm: 1, pos: 1502, qname: "ayylmao_diff".to_string(), template_pos: true };
+        let ur_third = UniqueRead { chrm: 1, pos: 42000, qname: "ayylmao_diff".to_string(), template_pos: true };
+        let ur_fourth = UniqueRead { chrm: 1, pos: 42069, qname: "ayylmao_diff".to_string(), template_pos: true };
+        let ur_fifth = UniqueRead { chrm: 2, pos: 1, qname: "ayylmao_diffchrm".to_string(), template_pos: true };
+        
+        tree.insert(UniqueReadItem::UniqueRead(ur_first.clone())); 
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree.contains(&ur_first_clone), true);
+        tree.insert(UniqueReadItem::UniqueRead(ur_first_clone.clone()));
+        assert_eq!(tree.len(), 1);
+        tree.insert(UniqueReadItem::UniqueRead(ur_first_pair.clone()));
+        assert_eq!(tree.len(), 2);
+        tree.insert(UniqueReadItem::UniqueRead(ur_third.clone()));
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree.contains(&ur_first_clone), false);
+        tree.insert(UniqueReadItem::UniqueRead(ur_fourth.clone()));
+        assert_eq!(tree.len(), 2);
+        tree.insert(UniqueReadItem::UniqueRead(ur_fifth.clone())); // should drop all the others
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree.contains(&ur_third), false);
+        assert_eq!(tree.contains(&ur_fourth), false);
+
+        // this is nice with nocap
+        for val in tree.iter(){
+            println!("{:?}", val);
+        }
+
+    }
 
     /// tests the range ( 1, 6 )
     #[test]
@@ -511,7 +660,7 @@ mod tests {
         }
 
         //prep iterator
-        let mut bamvcfrecord = BAMVCFRecord::new(&mut bam, vcf_list);
+        let mut bamvcfrecord = BAMVCFRecord::new(&mut "test/test.bam", vcf_list);
         let mut test = 0;
         b.iter( || {
             match bamvcfrecord.next(){

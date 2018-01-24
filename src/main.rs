@@ -51,8 +51,6 @@ fn mscp_run(config: Config, n_threads: usize){
     let mut before_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
     let mut after_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
 
-
-
     let mut vec_list: Vec<Vec<rust_htslib::bcf::Record>> = vec![];
     for _ in 0..n_threads{
         vec_list.push(vec![]);
@@ -126,8 +124,8 @@ fn mscp_run(config: Config, n_threads: usize){
         }
             
         eprintln!("Done.");
-        write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
-        //write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+        //write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+        write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
     });
 
     for handle in handles {
@@ -220,8 +218,8 @@ fn run(config: Config){
         out.write(&item).unwrap(); // writes filtered reads.
     }
 
-    //write_statistics(&config.stats.to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
-    write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+    write_statistics(&config.stats.to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+    //write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
 
 }
 
