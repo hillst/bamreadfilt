@@ -32,6 +32,8 @@ pub struct Config {
     pub max_frag: u32,
     pub num_threads: u8,
     pub stats: String,
+    pub before_bed: String,
+    pub after_bed: String,
 
 }
 
@@ -52,9 +54,11 @@ impl Config {
         let stats_after: bool = true;
         let bam_out_filename = "out.bam".to_string(); 
         let num_threads = 1;
-        let stats = "stats.txt".to_string();
+        let stats  = "stats.txt".to_string();
+        let before_bed = "before.bed".to_string();
+        let after_bed  = "after.bed".to_string();
         let mut conf = Config { verbose, bam_filename, vcf_filename, mapq, vbq, mrbq, min_pir, max_pir, use_stdout, 
-                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats };
+                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats, before_bed, after_bed};
 
         {  // this block limits scope of borrows by ap.refer() method
             let mut ap = ArgumentParser::new();
@@ -106,6 +110,12 @@ impl Config {
             ap.refer(&mut conf.stats)
                 .add_option(&["--stats"], Store,
                 "File where we would like to place statistics.");
+            ap.refer(&mut conf.before_bed)
+                .add_option(&["--sites_before_bed"], Store,
+                "Destination filename for sites present before filtering.");
+            ap.refer(&mut conf.after_bed)
+                .add_option(&["--sites_after_bed"], Store,
+                "Destination filename for sites present after filtering.");
             ap.refer(&mut conf.num_threads)
                 .add_option(&["--threads", "-t"], Store,
                 "Number of threads.");
@@ -115,9 +125,6 @@ impl Config {
 
     }
 }
-
-
-
 
 
 /// Simple structure for capturing a current VCF entry (removes the INFO field effectively)
@@ -583,7 +590,6 @@ mod tests {
         assert_eq!(var, 0.0);
 
     }
-
 
     #[test]
     fn stress_running_average_update() {

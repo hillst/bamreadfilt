@@ -129,6 +129,9 @@ fn mscp_run(config: Config, n_threads: usize){
         eprintln!("Done.");
         //write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
         write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+        write_bed(&config.before_bed, &before_site_stats).unwrap();
+        write_bed(&config.after_bed, &after_site_stats).unwrap();
+
     });
 
     for handle in handles {
@@ -254,7 +257,8 @@ fn run(config: Config){
     }
 
     write_statistics(&config.stats.to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
-    //write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+    write_bed(&config.before_bed, &before_site_stats).unwrap();
+    write_bed(&config.after_bed, &after_site_stats).unwrap();
 
 }
 
@@ -263,7 +267,6 @@ fn run(config: Config){
 pub fn write_statistics(output_filename: &String, before_stats: bamreadfilt::SiteStats, after_stats: bamreadfilt::SiteStats, before_sites: u64, after_sites: u64) -> Result<(),std::io::Error> {
     use std::io::Write;
     use std::fs::File;
-
 
     let mut f = File::create(output_filename)?;
     writeln!(&mut f, "setting,mrbq_mean,mrbq_var,vbq_mean,vbq_var,mapq_mean,mapq_var,duplicated_mean,duplicated_var,frag_size,num_sites,num_reads").unwrap();
@@ -285,6 +288,19 @@ pub fn write_statistics(output_filename: &String, before_stats: bamreadfilt::Sit
                after_sites,
                after_stats.num_reads
            )?;
+    Ok(())
+
+}
+
+pub fn write_bed(output_filename: &String, sites: &HashSet<bamreadfilt::VCFRecord>) -> Result<(), std::io::Error>{
+    use std::io::Write;
+    use std::fs::File;
+
+    let mut f = File::create(output_filename)?;
+
+    for site in sites.iter(){
+        writeln!(&mut f, "{}\t{}\t{}\t{}", site.chrm, site.pos, site.ref_b, site.alt_b)?;
+    }
     Ok(())
 
 }
