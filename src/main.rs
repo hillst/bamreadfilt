@@ -299,7 +299,7 @@ pub fn write_bed(output_filename: &String, sites: &HashSet<bamreadfilt::VCFRecor
     let mut f = File::create(output_filename)?;
 
     for site in sites.iter(){
-        writeln!(&mut f, "{}\t{}\t{}\t{}", site.chrm, site.pos, site.ref_b, site.alt_b)?;
+        writeln!(&mut f, "{}\t{}\t{}\t{}", site.chrm, site.pos, site.ref_b as char , site.alt_b as char)?;
     }
     Ok(())
 
