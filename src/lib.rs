@@ -13,6 +13,7 @@ use rust_htslib::bam;
 use rust_htslib::bam::Read;
 use rust_htslib::bcf;
 
+
 #[derive(Debug,Clone)]
 pub struct Config {
     pub verbose: bool,
@@ -45,7 +46,7 @@ impl Config {
         let min_pir = 0;
         let max_pir = 10000000;
         let min_frag = 0;
-        let max_frag = 10000000;
+        let max_frag = std::u32::MAX; // i would be this is getting filtered.
         let use_stdout: bool = false;
         let stats_before: bool = true;
         let stats_after: bool = true;
@@ -249,40 +250,6 @@ impl Iterator for BAMVCFRecord {
             }
         }
     }
-}
-
-pub fn lofreq_shitty() {
-    /* How shitty is lofreq?
-     *
-     * (MRD)
-     * Of all sites called by lofreq in the tumor (CA samples and cfDNA),
-     *  how many (stats) were then found in the plasma? Of how many found in the plasma are noise?
-     *
-     *
-     *
-     *  we define noise as anything that fails a filter
-     *
-     *
-     *
-
-     list_of_ca_samples = [];
-     for bam, vcf in ca_samples
-         let bamvcf = bamvcfrecord(bam, vcf);
-
-         // update_stats(x)
-         //     i would like to collect the number of site found and the number of reads associated with each site
-
-         bamvcf.map( |x| { stat_holder_before.update_stats(x) }
-                    )
-               .filter( |x| myfilters(x))
-               .filter( .. )
-               .filter( .. )
-               .map(stat_holder_after.update_stats(x))
-
-               bamreadfilt filtstats bams vcfs
-    */ 
-
-
 }
 
 /// mrbq returns the mean base quality of the passed `record`
