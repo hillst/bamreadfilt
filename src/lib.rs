@@ -34,6 +34,7 @@ pub struct Config {
     pub stats: String,
     pub before_bed: String,
     pub after_bed: String,
+    pub remove_duplicates: bool,
 
 }
 
@@ -57,8 +58,9 @@ impl Config {
         let stats  = "stats.txt".to_string();
         let before_bed = "before.bed".to_string();
         let after_bed  = "after.bed".to_string();
+        let remove_duplicates = false;
         let mut conf = Config { verbose, bam_filename, vcf_filename, mapq, vbq, mrbq, min_pir, max_pir, use_stdout, 
-                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats, before_bed, after_bed};
+                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats, before_bed, after_bed, remove_duplicates};
 
         {  // this block limits scope of borrows by ap.refer() method
             let mut ap = ArgumentParser::new();
@@ -85,6 +87,9 @@ impl Config {
             ap.refer(&mut conf.stats_after)
                 .add_option(&["--stats_after"], StoreTrue,
                 "Collect filter statistics for reads after filtering.");
+            ap.refer(&mut conf.remove_duplicates)
+                .add_option(&["--remove_duplicates"], StoreTrue,
+                "Remove all marked duplicates from the final bam. (Default: False)");
             //filters
             ap.refer(&mut conf.mapq)
                 .add_option(&["--mapq"], Store,

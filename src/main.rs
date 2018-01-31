@@ -99,6 +99,7 @@ fn mscp_run(config: Config, n_threads: usize){
                 before_site_stats.insert(_v.clone());
                 (_i, _v, p)
             })
+            .filter(| &(ref _i, _v, p)| { !config.remove_duplicates || !_i.is_duplicate() }) //rmdup
             .filter(| &(ref _i, _v, p)| { p >= config.min_pir && p <= config.max_pir}) //pir filter
             .filter(| &(ref i, _v, _p)| { 
                 if i.is_paired() {
