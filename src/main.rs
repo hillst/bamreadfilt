@@ -31,15 +31,18 @@ fn mscp_run(config: Config, n_threads: usize){
     use rust_htslib::bam;
     use rust_htslib::bam::record::Aux;
     let bam_filename = config.bam_filename.clone();
+    let vcf_filename= config.vcf_filename.clone();
     
     //TODO duplicated code
-    // parse vcf -> vec
+
+
     let vcf_path = Path::new(&config.vcf_filename);
     let mut vcf_itr = Reader::from_path(vcf_path).expect("cannot open vcf"); 
 
     let path = Path::new(&bam_filename);//why is it only using move semantics lol
     let bam = bam::IndexedReader::from_path(path).ok().expect("Error opening bam.");
     let head = bam::Header::from_template(bam.header()); // wonder if i gotta clone dis;
+   
 
     let mut out = match config.use_stdout {
         false => bam::Writer::from_path("new_out.bam", &head).expect("Error opening bam for writing."), 
@@ -129,8 +132,12 @@ fn mscp_run(config: Config, n_threads: usize){
         eprintln!("Done.");
         //write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
         write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
-        write_bed(&config.before_bed, &before_site_stats).unwrap();
-        write_bed(&config.after_bed, &after_site_stats).unwrap();
+        let _vp = Path::new(&vcf_filename); 
+        let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
+        let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
+
+        write_bed(&config.before_bed, &before_site_stats, &vcf_head).unwrap();
+        write_bed(&config.after_bed, &after_site_stats, &vcf_head).unwrap();
 
     });
 
@@ -160,6 +167,11 @@ fn run(config: Config){
     use rust_htslib::bam::record::Aux;
 
     let bam_filename = config.bam_filename.clone();
+    let vcf_filename= config.vcf_filename.clone();
+
+    let _vp = Path::new(&vcf_filename); 
+    let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
+    let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
     //only used for building header
     let path = Path::new(&bam_filename); //why is it only using move semantics lol
     let bam = bam::IndexedReader::from_path(path).ok().expect("Error opening bam.");
@@ -257,8 +269,8 @@ fn run(config: Config){
     }
 
     write_statistics(&config.stats.to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
-    write_bed(&config.before_bed, &before_site_stats).unwrap();
-    write_bed(&config.after_bed, &after_site_stats).unwrap();
+    write_bed(&config.before_bed, &before_site_stats, &vcf_head).unwrap();
+    write_bed(&config.after_bed, &after_site_stats, &vcf_head).unwrap();
 
 }
 
@@ -292,14 +304,14 @@ pub fn write_statistics(output_filename: &String, before_stats: bamreadfilt::Sit
 
 }
 
-pub fn write_bed(output_filename: &String, sites: &HashSet<bamreadfilt::VCFRecord>) -> Result<(), std::io::Error>{
+pub fn write_bed(output_filename: &String, sites: &HashSet<bamreadfilt::VCFRecord>, vcf_head: &rust_htslib::bcf::header::HeaderView) -> Result<(), std::io::Error>{
     use std::io::Write;
     use std::fs::File;
 
     let mut f = File::create(output_filename)?;
 
     for site in sites.iter(){
-        writeln!(&mut f, "{}\t{}\t{}\t{}", site.chrm, site.pos, site.ref_b as char , site.alt_b as char)?;
+        writeln!(&mut f, "{}\t{}\t{}\t{}", std::str::from_utf8(vcf_head.rid2name(site.chrm)).unwrap(), site.pos, site.ref_b as char , site.alt_b as char)?;
     }
     Ok(())
 
