@@ -149,6 +149,12 @@ impl VCFRecord {
             // this shold produce a recoverable error but uh I guess we wont worry about that for now
             panic!("error, detected non-diploid site");
         } else {
+            if alleles[0].len() > 1 {
+                panic!("error, deletion detected in vcf. Insertions and deletions are not supported. {} {}", std::str::from_utf8(record.header().rid2name(chrm)).unwrap(), pos);
+            } 
+            if alleles[1].len() > 1 {
+                panic!("error, insertion detected in vcf. Insertions and deletions are not supported. {} {}", std::str::from_utf8(record.header().rid2name(chrm)).unwrap(), pos);
+            } 
             let ref_b = alleles[0][0].clone();
             let alt_b = alleles[1][0].clone();
             VCFRecord { chrm: chrm, pos : pos, ref_b: ref_b, alt_b: alt_b } 
