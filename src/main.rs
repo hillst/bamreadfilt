@@ -125,8 +125,9 @@ fn mscp_run(config: Config, n_threads: usize){
                 eprintln!("{} reads processed.", i);
             }
             item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
-            item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.alt_b) );
-            item.push_aux( "B2".as_bytes(), &Aux::Integer(_pir as i64) );
+            item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
+            item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
+            item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
             out.write(&item).unwrap(); // writes filtered reads.
         }
             
@@ -245,8 +246,9 @@ fn run(config: Config){
         //   
         //
         item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
-        item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.alt_b) );
-        item.push_aux( "B2".as_bytes(), &Aux::Integer(_pir as i64) );
+        item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
+        item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
+        item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
 
 
         // so this approach would be along the lines of just going from the bam and using the read tags to get the pir *directly*
