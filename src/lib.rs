@@ -88,8 +88,8 @@ impl Config {
                 .add_option(&["--stats_after"], StoreTrue,
                 "Collect filter statistics for reads after filtering.");
             ap.refer(&mut conf.remove_duplicates)
-                .add_option(&["--remove_duplicates", "--rmdup", "-r"], StoreTrue,
-                "Remove all marked duplicates from the final bam. (Default: False)");
+                .add_option(&["--filter_duplicates", "--filtdup", "-r"], StoreTrue,
+                "Filter all marked duplicates from the final bam. (Default: False)");
             //filters
             ap.refer(&mut conf.mapq)
                 .add_option(&["--mapq"], Store,
