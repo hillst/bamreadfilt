@@ -186,14 +186,14 @@ impl BAMVCFRecord {
     // one: if there are no reads, get the next vcf entry and fetch reads (and check if they exist)
     // two: if there is a vcf entry and reads return the next read 
 
-    pub fn new(bam_path: &str , mut vcf_reader: Vec<bcf::Record>) -> BAMVCFRecord {
+    pub fn new(bam_path: &str , mut vcf_reader: Vec<bcf::Record>) -> Result<BAMVCFRecord, std::string::String> {
         let vcf_head = match vcf_reader.pop(){
             Some(entry) => VCFRecord::new(&entry),
-            None => panic!("No entries in VCF vector."), // is this really necessary? it is nice to exit first..
+            None => {return Err("Empty vcf".to_string()) },// TODO propagate this error, if we panic in main, write an empty bam (technically what they asked for!)
         };
         let mut bam_reader = bam::IndexedReader::from_path(bam_path).ok().expect("Error opening bam.");
         bam_reader.fetch(vcf_head.chrm, vcf_head.pos, vcf_head.pos + 1).expect("Error fetching entry in bam -- check your bam for corruption.");     //make sure this is right
-        BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head), read_tracker: UniqueReadTree::new(200) }
+        Ok(BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head), read_tracker: UniqueReadTree::new(200) })
 
     }
 
@@ -242,6 +242,10 @@ impl Iterator for BAMVCFRecord {
                                     Ok(val) => {
                                         // we are denoting position in the read as pir
                                         // some option for including variants that would occur in softmasked regions.
+                                        if val.is_unmapped() {
+                                            //NOTE: now we are implciitly trashing unmapped reads, is this desired behviour? 
+                                            continue;
+                                        }
                                         let pir = match val.cigar().read_pos(vcf_entry.pos, include_softclips, include_dels).expect("Error parsing cigar string"){
                                             Some(val) => val as usize,
                                             None => { continue; }
@@ -364,7 +368,7 @@ impl RunningAverage {
     ///     use this function when you are done updating the struct :)
     pub fn finalize(&self) -> Option<(f64, f64)>{
         if self.count < 2 {
-            None
+            return Some((-1.0, -1.0)) 
         } else {
             let variance = self.m2 / (self.count) as f64; // (self.count - 1 was here before...)
             return Some((self.mean, variance))

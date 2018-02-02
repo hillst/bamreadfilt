@@ -80,12 +80,18 @@ fn mscp_run(config: Config, n_threads: usize){
         let bam_filename = bam_filename.clone();
         let tx = tx.clone();
         handles.push(thread::spawn(move || {
-            let bamvcfrecord = BAMVCFRecord::new(&bam_filename, vcf_list);
-            for (item, _vcf, _pir) in bamvcfrecord
-            // we can alternatively have filters apply here, but then we will have trouble with computingstatistics.
-            {
-                tx.send((item, _vcf, _pir)).unwrap();
-            }
+            let bamvcfrecord = match BAMVCFRecord::new(&bam_filename, vcf_list){
+                Ok(bamvcfrecord) => {
+                    for (item, _vcf, _pir) in bamvcfrecord
+                    // we can alternatively have filters apply here, but then we will have trouble with computingstatistics.
+                    {
+                        tx.send((item, _vcf, _pir)).unwrap();
+                    }
+                },
+                Err(error) => {
+                    eprintln!("{}", error);
+                } 
+            };
         }));
     }
 
@@ -104,7 +110,6 @@ fn mscp_run(config: Config, n_threads: usize){
             .filter(| &(ref i, _v, _p)| { 
                 if i.is_paired() {
                     i.insert_size().abs() as u32  >= config.min_frag && i.insert_size().abs() as u32 <= config.max_frag
-
                 } else {
                     true
                 }
@@ -193,7 +198,11 @@ fn run(config: Config){
         vcf_list.push(entry.ok().unwrap());
     }
 
-    let bamvcfrecord = BAMVCFRecord::new(&bam_filename, vcf_list);
+    let bamvcfrecord = match BAMVCFRecord::new(&bam_filename, vcf_list){
+        Ok(val) => val,
+        Err(e) => { eprintln!("{}", e); return; }
+        
+    };
 
     let mut before_stats = bamreadfilt::SiteStats::new();
     let mut after_stats = bamreadfilt::SiteStats::new();
@@ -201,76 +210,47 @@ fn run(config: Config){
     let mut before_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
     let mut after_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
 
+    
+        for (i, (mut item, _vcf, _pir)) in bamvcfrecord
+            .map(   | (_i, _v, p) | { 
+                before_stats.collect_stats_stream(&_i, &_v, p);
+                before_site_stats.insert(_v.clone());
+                (_i, _v, p)
+            })
+            .filter(| &(ref _i, _v, p)| { ! config.remove_duplicates || ! _i.is_duplicate() }) //rmdup
+            .filter(| &(ref _i, _v, p)| { p >= config.min_pir && p <= config.max_pir}) //pir filter
+            .filter(| &(ref i, _v, _p)| { 
+                if i.is_paired() {
+                    i.insert_size().abs() as u32  >= config.min_frag && i.insert_size().abs() as u32 <= config.max_frag
 
-    for (i, (mut item, _vcf, _pir)) in bamvcfrecord
-                                        .map(   | (_i, _v, p) | { 
-                                            before_stats.collect_stats_stream(&_i, &_v, p);
-                                            before_site_stats.insert(_v.clone());
-                                            (_i, _v, p)
-                                        })
-                                        .filter(| &(ref _i, _v, p)| { ! config.remove_duplicates || ! _i.is_duplicate() }) //rmdup
-                                        .filter(| &(ref _i, _v, p)| { p >= config.min_pir && p <= config.max_pir}) //pir filter
-                                        .filter(| &(ref i, _v, _p)| { 
-                                            if i.is_paired() {
-                                                i.insert_size().abs() as u32  >= config.min_frag && i.insert_size().abs() as u32 <= config.max_frag
+                } else {
+                    true
+                }
+            }) //pir filter
+            .filter(| &(ref i, _v, p) | {                     //vbq filter
+                i.qual()[p] >= config.vbq
+            })
+            .filter(| &(ref i, _v, _p)| { i.mapq() >= config.mapq })    //mapq filter
+            .filter(| &(ref i, _v, _p)| { bamreadfilt::mrbq(i) >= config.mrbq }) //mrbq filter
+            .map(   | (_i, _v, p) | { 
+                after_stats.collect_stats_stream(&_i, &_v, p);
+                after_site_stats.insert(_v.clone());
+                (_i, _v, p)
+            })
+            .enumerate() {
+                if config.verbose && i % 1000 == 0 {
+                    eprintln!("{} reads processed.", i);
+                    //use std::mem::size_of;
+                    
+                    //println!( "size of {}", size_of::<(bam::record::Record, bamreadfilt::VCFRecord, usize)>() );
+                }
+                item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
+                item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
+                item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
+                item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
 
-                                            } else {
-                                                true
-                                            }
-                                        }) //pir filter
-                                        .filter(| &(ref i, _v, p) | {                     //vbq filter
-                                            i.qual()[p] >= config.vbq
-                                        })
-                                        .filter(| &(ref i, _v, _p)| { i.mapq() >= config.mapq })    //mapq filter
-                                        .filter(| &(ref i, _v, _p)| { bamreadfilt::mrbq(i) >= config.mrbq }) //mrbq filter
-                                        .map(   | (_i, _v, p) | { 
-                                            after_stats.collect_stats_stream(&_i, &_v, p);
-                                            after_site_stats.insert(_v.clone());
-                                            (_i, _v, p)
-                                        })
-                                        .enumerate() 
-    {
-        if config.verbose && i % 1000 == 0 {
-            eprintln!("{} reads processed.", i);
-            //use std::mem::size_of;
-            
-            //println!( "size of {}", size_of::<(bam::record::Record, bamreadfilt::VCFRecord, usize)>() );
+                out.write(&item).unwrap(); // writes filtered reads.
         }
-        // these work so we can let them just kinda exist
-        //
-        // println!( "{:?}", item.seq().as_bytes() );
-        // println!( "{:?}", item.cigar());
-        // println!( "{:?}", item.qual());
-        //
-        // This also works
-        //   
-        //
-        item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
-        item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
-        item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
-        item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
-
-
-        // so this approach would be along the lines of just going from the bam and using the read tags to get the pir *directly*
-        //      if we do it this way, we dont havet o fumble computing pir ourselves but we still would need to break for the different cigar strings.
-
-        // the alternate is to use message passing by serializing into json and then to deserialize in python and to just roll with it. 
-        //      I still kind of like this more? i dont really know.. I'm going to sleep on it.
-
-        //use bamreadfilt::tfrecord;
-
-        // we would want to expand this out, or create a way to iterate between these two thigns, or align them. these are what need to be aligned.
-        //      basically we just need to pay attention to deletions
-
-        // after working this out more (since there is no reference sequence here) it seems like we are going to want to use the other approach (keep mine and use work 
-        //              with tags)
-
-
-        //println!("{:?} {:?}", item.cigar().len(), item.seq().len() );
-
-        out.write(&item).unwrap(); // writes filtered reads.
-
-    }
 
     write_statistics(&config.stats.to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
     write_bed(&config.before_bed, &before_site_stats, &vcf_head).unwrap();
