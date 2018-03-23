@@ -30,6 +30,8 @@ fn mscp_run(config: Config, n_threads: usize){
     use rust_htslib::bam::Read;
     use rust_htslib::bam;
     use rust_htslib::bam::record::Aux;
+    use std::io::Write;
+    use std::fs::File;
     let bam_filename = config.bam_filename.clone();
     let vcf_filename= config.vcf_filename.clone();
     
@@ -48,6 +50,8 @@ fn mscp_run(config: Config, n_threads: usize){
         false => bam::Writer::from_path("new_out.bam", &head).expect("Error opening bam for writing."), 
         true => bam::Writer::from_stdout(&head).expect("Error opening stdout for writing."),
     };
+    let mut raw_stats_fd = File::create(config.raw_stats_fn.clone()).unwrap();
+
     
     let mut before_stats = bamreadfilt::SiteStats::new();
     let mut after_stats = bamreadfilt::SiteStats::new();
@@ -120,17 +124,24 @@ fn mscp_run(config: Config, n_threads: usize){
                 (_i, _v, p)
             })
             .enumerate() {
-
-            if config.verbose && i % 1000 == 0 {
-                eprintln!("{} reads processed.", i);
+                if config.verbose && i % 1000 == 0 {
+                    eprintln!("{} reads processed.", i);
+                }
+                item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
+                item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
+                item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
+                item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
+                out.write(&item).unwrap(); // writes filtered reads.
+                if config.raw_stats_fn != "/dev/null".to_string() { 
+                    writeln!(raw_stats_fd,"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",  
+                                 _vcf.chrm, _vcf.pos, _vcf.ref_b as char, _vcf.alt_b as char,  // header info
+                                 std::str::from_utf8( &item.qname()).unwrap(),                 // 
+                                 bamreadfilt::mrbq(&item), &item.qual()[_pir] , item.mapq(), _pir, item.insert_size() 
+                    );
+                }
             }
-            item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
-            item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
-            item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
-            item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
-            out.write(&item).unwrap(); // writes filtered reads.
-        }
             
+
         eprintln!("Done.");
         //write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
         write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
@@ -236,37 +247,11 @@ fn run(config: Config){
             
             //println!( "size of {}", size_of::<(bam::record::Record, bamreadfilt::VCFRecord, usize)>() );
         }
-        // these work so we can let them just kinda exist
-        //
-        // println!( "{:?}", item.seq().as_bytes() );
-        // println!( "{:?}", item.cigar());
-        // println!( "{:?}", item.qual());
-        //
-        // This also works
-        //   
-        //
         item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
         item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
         item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
         item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
 
-
-        // so this approach would be along the lines of just going from the bam and using the read tags to get the pir *directly*
-        //      if we do it this way, we dont havet o fumble computing pir ourselves but we still would need to break for the different cigar strings.
-
-        // the alternate is to use message passing by serializing into json and then to deserialize in python and to just roll with it. 
-        //      I still kind of like this more? i dont really know.. I'm going to sleep on it.
-
-        //use bamreadfilt::tfrecord;
-
-        // we would want to expand this out, or create a way to iterate between these two thigns, or align them. these are what need to be aligned.
-        //      basically we just need to pay attention to deletions
-
-        // after working this out more (since there is no reference sequence here) it seems like we are going to want to use the other approach (keep mine and use work 
-        //              with tags)
-
-
-        //println!("{:?} {:?}", item.cigar().len(), item.seq().len() );
 
         out.write(&item).unwrap(); // writes filtered reads.
 
