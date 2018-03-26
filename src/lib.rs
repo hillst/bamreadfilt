@@ -7,11 +7,12 @@ extern crate byteorder;
 extern crate rust_htslib;
 extern crate argparse;
 
-use argparse::{ArgumentParser, StoreTrue, Store, StoreFalse};
+use argparse::{ArgumentParser, StoreTrue, Store, StoreFalse, StoreOption};
 use std::collections::HashSet;
 use rust_htslib::bam;
 use rust_htslib::bam::Read;
 use rust_htslib::bcf;
+use std::fs::File;
 
 
 #[derive(Debug,Clone)]
@@ -35,6 +36,7 @@ pub struct Config {
     pub before_bed: String,
     pub after_bed: String,
     pub remove_duplicates: bool,
+    pub raw_stats_fn: String,
 
 }
 
@@ -58,9 +60,10 @@ impl Config {
         let stats  = "stats.txt".to_string();
         let before_bed = "before.bed".to_string();
         let after_bed  = "after.bed".to_string();
+        let raw_stats_fn = "/dev/null".to_string();
         let remove_duplicates = false;
         let mut conf = Config { verbose, bam_filename, vcf_filename, mapq, vbq, mrbq, min_pir, max_pir, use_stdout, 
-                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats, before_bed, after_bed, remove_duplicates};
+                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats, before_bed, after_bed, remove_duplicates, raw_stats_fn};
 
         {  // this block limits scope of borrows by ap.refer() method
             let mut ap = ArgumentParser::new();
@@ -121,6 +124,9 @@ impl Config {
             ap.refer(&mut conf.after_bed)
                 .add_option(&["--sites_after_bed"], Store,
                 "Destination filename for sites present after filtering.");
+            ap.refer(&mut conf.raw_stats_fn)
+                .add_option(&["--raw_stats_fn"], Store,
+                "Destination filename for raw read-level statistics after filtering.");
             ap.refer(&mut conf.num_threads)
                 .add_option(&["--threads", "-t"], Store,
                 "Number of threads.");
@@ -186,14 +192,19 @@ impl BAMVCFRecord {
     // one: if there are no reads, get the next vcf entry and fetch reads (and check if they exist)
     // two: if there is a vcf entry and reads return the next read 
 
-    pub fn new(bam_path: &str , mut vcf_reader: Vec<bcf::Record>) -> Result<BAMVCFRecord, std::string::String> {
+    pub fn new(bam_path: &str , mut vcf_reader: Vec<bcf::Record>) -> BAMVCFRecord {
         let vcf_head = match vcf_reader.pop(){
             Some(entry) => VCFRecord::new(&entry),
-            None => {return Err("Empty vcf".to_string()) },// TODO propagate this error, if we panic in main, write an empty bam (technically what they asked for!)
+            None => panic!("No entries in VCF vector."), // is this really necessary? it is nice to exit first..
         };
         let mut bam_reader = bam::IndexedReader::from_path(bam_path).ok().expect("Error opening bam.");
-        bam_reader.fetch(vcf_head.chrm, vcf_head.pos, vcf_head.pos + 1).expect("Error fetching entry in bam -- check your bam for corruption.");     //make sure this is right
-        Ok(BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head), read_tracker: UniqueReadTree::new(200) })
+        //interesting, so what causes this to an hero?
+        // this was inline with the end of the fetch call. .expect("Error fetching entry in bam -- check your bam for corruption.");     
+        let fetched = match bam_reader.fetch(vcf_head.chrm, vcf_head.pos, vcf_head.pos + 1){
+            Ok(val) => val,
+            Err(e) => {eprintln!("CAUGHT AN ERROR IN NEW {}", e); panic!("error fetching");},
+        };
+        BAMVCFRecord { _bam: bam_reader, _vcf: vcf_reader, vcf_head: Some(vcf_head), read_tracker: UniqueReadTree::new(200) }
 
     }
 
@@ -208,7 +219,15 @@ impl BAMVCFRecord {
                     None => panic!("Invalid reference id in VCF"),
                 };
                 //update bam pointer
-                self._bam.fetch(rid, entry.pos(), entry.pos() + 1).expect("Error fetching entry in bam -- check your bam for corruption.");
+
+                //this was before debug route
+                //self._bam.fetch(rid, entry.pos(), entry.pos() + 1).expect("Error fetching entry in bam -- check your bam for corruption.");
+
+                //this is debug route
+                let fetched = match self._bam.fetch(rid, entry.pos(), entry.pos() + 1){
+                    Ok(val) => val,
+                    Err(e) => {eprintln!("caught fetching error when advancing VCF {} {} {} {}", e, rid, entry.pos(), entry.pos()); panic!("error fetching");},
+                };
                 Some(VCFRecord::new(&entry))
             },
             None => {
@@ -242,10 +261,6 @@ impl Iterator for BAMVCFRecord {
                                     Ok(val) => {
                                         // we are denoting position in the read as pir
                                         // some option for including variants that would occur in softmasked regions.
-                                        if val.is_unmapped() {
-                                            //NOTE: now we are implciitly trashing unmapped reads, is this desired behviour? 
-                                            continue;
-                                        }
                                         let pir = match val.cigar().read_pos(vcf_entry.pos, include_softclips, include_dels).expect("Error parsing cigar string"){
                                             Some(val) => val as usize,
                                             None => { continue; }
@@ -368,7 +383,7 @@ impl RunningAverage {
     ///     use this function when you are done updating the struct :)
     pub fn finalize(&self) -> Option<(f64, f64)>{
         if self.count < 2 {
-            return Some((-1.0, -1.0)) 
+            None
         } else {
             let variance = self.m2 / (self.count) as f64; // (self.count - 1 was here before...)
             return Some((self.mean, variance))

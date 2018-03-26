@@ -30,6 +30,8 @@ fn mscp_run(config: Config, n_threads: usize){
     use rust_htslib::bam::Read;
     use rust_htslib::bam;
     use rust_htslib::bam::record::Aux;
+    use std::io::Write;
+    use std::fs::File;
     let bam_filename = config.bam_filename.clone();
     let vcf_filename= config.vcf_filename.clone();
     
@@ -48,6 +50,8 @@ fn mscp_run(config: Config, n_threads: usize){
         false => bam::Writer::from_path("new_out.bam", &head).expect("Error opening bam for writing."), 
         true => bam::Writer::from_stdout(&head).expect("Error opening stdout for writing."),
     };
+    let mut raw_stats_fd = File::create(config.raw_stats_fn.clone()).unwrap();
+
     
     let mut before_stats = bamreadfilt::SiteStats::new();
     let mut after_stats = bamreadfilt::SiteStats::new();
@@ -80,25 +84,23 @@ fn mscp_run(config: Config, n_threads: usize){
         let bam_filename = bam_filename.clone();
         let tx = tx.clone();
         handles.push(thread::spawn(move || {
-            let bamvcfrecord = match BAMVCFRecord::new(&bam_filename, vcf_list){
-                Ok(bamvcfrecord) => {
-                    for (item, _vcf, _pir) in bamvcfrecord
-                    // we can alternatively have filters apply here, but then we will have trouble with computingstatistics.
-                    {
-                        tx.send((item, _vcf, _pir)).unwrap();
-                    }
-                },
-                Err(error) => {
-                    eprintln!("{}", error);
-                } 
-            };
+            let bamvcfrecord = BAMVCFRecord::new(&bam_filename, vcf_list);
+            for (item, _vcf, _pir) in bamvcfrecord
+            // we can alternatively have filters apply here, but then we will have trouble with computingstatistics.
+            {
+                tx.send((item, _vcf, _pir)).unwrap();
+            }
         }));
     }
 
 
     // this part feels like something that is easy to modify and something we could bake into bamvcf iterator
     let config = config.clone();
+
     let consumer = thread::spawn(move || {
+        let _vp = Path::new(&vcf_filename); 
+        let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
+        let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
         for (i, (mut item, _vcf, _pir)) in rx.iter()
             .map(   | (_i, _v, p) | { 
                 before_stats.collect_stats_stream(&_i, &_v, p); //NOTE this works because it is the consumer, so we have no race conditions at this point
@@ -110,6 +112,7 @@ fn mscp_run(config: Config, n_threads: usize){
             .filter(| &(ref i, _v, _p)| { 
                 if i.is_paired() {
                     i.insert_size().abs() as u32  >= config.min_frag && i.insert_size().abs() as u32 <= config.max_frag
+
                 } else {
                     true
                 }
@@ -125,23 +128,31 @@ fn mscp_run(config: Config, n_threads: usize){
                 (_i, _v, p)
             })
             .enumerate() {
-
-            if config.verbose && i % 1000 == 0 {
-                eprintln!("{} reads processed.", i);
+                if config.verbose && i % 1000 == 0 {
+                    eprintln!("{} reads processed.", i);
+                }
+                item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
+                item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
+                item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
+                item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
+                out.write(&item).unwrap(); // writes filtered reads.
+                if config.raw_stats_fn != "/dev/null".to_string() { 
+                    //TODO write a test here, _vcf.pos alone was giving us incorrect results :)
+                    writeln!(raw_stats_fd,"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",  
+                                 std::str::from_utf8(vcf_head.rid2name(_vcf.chrm)).unwrap(), _vcf.pos , _vcf.ref_b as char, _vcf.alt_b as char,  // header info
+                                 std::str::from_utf8( &item.qname()).unwrap(),                 // 
+                                 bamreadfilt::mrbq(&item), &item.qual()[_pir] , item.mapq(), _pir, item.insert_size() 
+                    );
+                }
             }
-            item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
-            item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
-            item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
-            item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
-            out.write(&item).unwrap(); // writes filtered reads.
-        }
             
+
         eprintln!("Done.");
         //write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
         write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
-        let _vp = Path::new(&vcf_filename); 
-        let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
-        let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
+        //let _vp = Path::new(&vcf_filename); 
+        //let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
+        //let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
 
         write_bed(&config.before_bed, &before_site_stats, &vcf_head).unwrap();
         write_bed(&config.after_bed, &after_site_stats, &vcf_head).unwrap();
@@ -198,11 +209,7 @@ fn run(config: Config){
         vcf_list.push(entry.ok().unwrap());
     }
 
-    let bamvcfrecord = match BAMVCFRecord::new(&bam_filename, vcf_list){
-        Ok(val) => val,
-        Err(e) => { eprintln!("{}", e); return; }
-        
-    };
+    let bamvcfrecord = BAMVCFRecord::new(&bam_filename, vcf_list);
 
     let mut before_stats = bamreadfilt::SiteStats::new();
     let mut after_stats = bamreadfilt::SiteStats::new();
@@ -210,47 +217,50 @@ fn run(config: Config){
     let mut before_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
     let mut after_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
 
-    
-        for (i, (mut item, _vcf, _pir)) in bamvcfrecord
-            .map(   | (_i, _v, p) | { 
-                before_stats.collect_stats_stream(&_i, &_v, p);
-                before_site_stats.insert(_v.clone());
-                (_i, _v, p)
-            })
-            .filter(| &(ref _i, _v, p)| { ! config.remove_duplicates || ! _i.is_duplicate() }) //rmdup
-            .filter(| &(ref _i, _v, p)| { p >= config.min_pir && p <= config.max_pir}) //pir filter
-            .filter(| &(ref i, _v, _p)| { 
-                if i.is_paired() {
-                    i.insert_size().abs() as u32  >= config.min_frag && i.insert_size().abs() as u32 <= config.max_frag
 
-                } else {
-                    true
-                }
-            }) //pir filter
-            .filter(| &(ref i, _v, p) | {                     //vbq filter
-                i.qual()[p] >= config.vbq
-            })
-            .filter(| &(ref i, _v, _p)| { i.mapq() >= config.mapq })    //mapq filter
-            .filter(| &(ref i, _v, _p)| { bamreadfilt::mrbq(i) >= config.mrbq }) //mrbq filter
-            .map(   | (_i, _v, p) | { 
-                after_stats.collect_stats_stream(&_i, &_v, p);
-                after_site_stats.insert(_v.clone());
-                (_i, _v, p)
-            })
-            .enumerate() {
-                if config.verbose && i % 1000 == 0 {
-                    eprintln!("{} reads processed.", i);
-                    //use std::mem::size_of;
-                    
-                    //println!( "size of {}", size_of::<(bam::record::Record, bamreadfilt::VCFRecord, usize)>() );
-                }
-                item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
-                item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
-                item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
-                item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
+    for (i, (mut item, _vcf, _pir)) in bamvcfrecord
+                                        .map(   | (_i, _v, p) | { 
+                                            before_stats.collect_stats_stream(&_i, &_v, p);
+                                            before_site_stats.insert(_v.clone());
+                                            (_i, _v, p)
+                                        })
+                                        .filter(| &(ref _i, _v, p)| { ! config.remove_duplicates || ! _i.is_duplicate() }) //rmdup
+                                        .filter(| &(ref _i, _v, p)| { p >= config.min_pir && p <= config.max_pir}) //pir filter
+                                        .filter(| &(ref i, _v, _p)| { 
+                                            if i.is_paired() {
+                                                i.insert_size().abs() as u32  >= config.min_frag && i.insert_size().abs() as u32 <= config.max_frag
 
-                out.write(&item).unwrap(); // writes filtered reads.
+                                            } else {
+                                                true
+                                            }
+                                        }) //pir filter
+                                        .filter(| &(ref i, _v, p) | {                     //vbq filter
+                                            i.qual()[p] >= config.vbq
+                                        })
+                                        .filter(| &(ref i, _v, _p)| { i.mapq() >= config.mapq })    //mapq filter
+                                        .filter(| &(ref i, _v, _p)| { bamreadfilt::mrbq(i) >= config.mrbq }) //mrbq filter
+                                        .map(   | (_i, _v, p) | { 
+                                            after_stats.collect_stats_stream(&_i, &_v, p);
+                                            after_site_stats.insert(_v.clone());
+                                            (_i, _v, p)
+                                        })
+                                        .enumerate() 
+    {
+        if config.verbose && i % 1000 == 0 {
+            eprintln!("{} reads processed.", i);
+            //use std::mem::size_of;
+            
+            //println!( "size of {}", size_of::<(bam::record::Record, bamreadfilt::VCFRecord, usize)>() );
         }
+        item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
+        item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
+        item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
+        item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
+
+
+        out.write(&item).unwrap(); // writes filtered reads.
+
+    }
 
     write_statistics(&config.stats.to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
     write_bed(&config.before_bed, &before_site_stats, &vcf_head).unwrap();
