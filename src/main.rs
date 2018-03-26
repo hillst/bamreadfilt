@@ -96,7 +96,11 @@ fn mscp_run(config: Config, n_threads: usize){
 
     // this part feels like something that is easy to modify and something we could bake into bamvcf iterator
     let config = config.clone();
+
     let consumer = thread::spawn(move || {
+        let _vp = Path::new(&vcf_filename); 
+        let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
+        let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
         for (i, (mut item, _vcf, _pir)) in rx.iter()
             .map(   | (_i, _v, p) | { 
                 before_stats.collect_stats_stream(&_i, &_v, p); //NOTE this works because it is the consumer, so we have no race conditions at this point
@@ -133,8 +137,9 @@ fn mscp_run(config: Config, n_threads: usize){
                 item.push_aux( "B3".as_bytes(), &Aux::Integer(_pir as i64) );
                 out.write(&item).unwrap(); // writes filtered reads.
                 if config.raw_stats_fn != "/dev/null".to_string() { 
+                    //TODO write a test here, _vcf.pos alone was giving us incorrect results :)
                     writeln!(raw_stats_fd,"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",  
-                                 _vcf.chrm, _vcf.pos, _vcf.ref_b as char, _vcf.alt_b as char,  // header info
+                                 std::str::from_utf8(vcf_head.rid2name(_vcf.chrm)).unwrap(), _vcf.pos , _vcf.ref_b as char, _vcf.alt_b as char,  // header info
                                  std::str::from_utf8( &item.qname()).unwrap(),                 // 
                                  bamreadfilt::mrbq(&item), &item.qual()[_pir] , item.mapq(), _pir, item.insert_size() 
                     );
@@ -145,9 +150,9 @@ fn mscp_run(config: Config, n_threads: usize){
         eprintln!("Done.");
         //write_statistics(&"stats.txt".to_string(), before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
         write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
-        let _vp = Path::new(&vcf_filename); 
-        let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
-        let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
+        //let _vp = Path::new(&vcf_filename); 
+        //let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
+        //let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
 
         write_bed(&config.before_bed, &before_site_stats, &vcf_head).unwrap();
         write_bed(&config.after_bed, &after_site_stats, &vcf_head).unwrap();
