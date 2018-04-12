@@ -14,7 +14,7 @@ fn main() {
     if num_threads > 1 {
         mscp_run(config, num_threads as usize);
     } else{
-        run(config);
+        mscp_run(config, num_threads as usize);
     }
 }
 
@@ -60,19 +60,32 @@ fn mscp_run(config: Config, n_threads: usize){
     let mut after_site_stats: HashSet<bamreadfilt::VCFRecord> = HashSet::new();
 
     let mut vec_list: Vec<Vec<rust_htslib::bcf::Record>> = vec![];
+
+
+    let mut master_list: Vec<rust_htslib::bcf::Record> = vec![];
+
+    
+    for (i, entry) in vcf_itr.records().enumerate() {
+        // I'm almost certain we will want these to be continuous in memory or atleast adjacent
+        master_list.push(entry.ok().unwrap());
+    }
+
+    // if master list is longer than n_threads we ok
+    //   otherwise decrease the number of threads? Or???? panic? warn the user?
+    if master_list.len() < n_threads {
+        eprintln!("[warn]: Empty VCF or number of mutations < number of threads. Check your vcf or decrease the number of threads");
+        return;
+    }
+    
     for _ in 0..n_threads{
         vec_list.push(vec![]);
     }
 
-
-    for (i, entry) in vcf_itr.records().enumerate() {
+    for (i, entry) in master_list.into_iter().enumerate() {
         // I'm almost certain we will want these to be continuous in memory or atleast adjacent
-        vec_list[i % n_threads].push(entry.ok().unwrap());
+        vec_list[i % n_threads].push(entry); //wait i wanna move this
     }
 
-    if vec_list.len() < n_threads {
-        panic!("Number of VCF entries < number of threads. Is this VCF okay?");
-    }
 
     let mut handles = Vec::with_capacity(n_threads);
 

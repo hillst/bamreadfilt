@@ -56,7 +56,7 @@ impl Config {
         let stats_before: bool = true;
         let stats_after: bool = true;
         let bam_out_filename = "out.bam".to_string(); 
-        let num_threads = 1;
+        let num_threads = 2;
         let stats  = "stats.txt".to_string();
         let before_bed = "before.bed".to_string();
         let after_bed  = "after.bed".to_string();
