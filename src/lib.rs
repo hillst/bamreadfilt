@@ -37,6 +37,9 @@ pub struct Config {
     pub after_bed: String,
     pub remove_duplicates: bool,
     pub raw_stats_fn: String,
+    pub tag: String,
+    pub max_sites: i64,
+    pub only_alts: bool, 
 
 }
 
@@ -53,17 +56,20 @@ impl Config {
         let min_frag = 0;
         let max_frag = std::u32::MAX; // i would be this is getting filtered.
         let use_stdout: bool = false;
-        let stats_before: bool = true;
-        let stats_after: bool = true;
+        let stats_before: bool = false;
+        let stats_after: bool = false;
+        let max_sites = -1;
         let bam_out_filename = "out.bam".to_string(); 
         let num_threads = 2;
         let stats  = "stats.txt".to_string();
         let before_bed = "before.bed".to_string();
         let after_bed  = "after.bed".to_string();
         let raw_stats_fn = "/dev/null".to_string();
+        let tag = "".to_string();
         let remove_duplicates = false;
+        let only_alts = false;
         let mut conf = Config { verbose, bam_filename, vcf_filename, mapq, vbq, mrbq, min_pir, max_pir, use_stdout, 
-                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats, before_bed, after_bed, remove_duplicates, raw_stats_fn};
+                                stats_before, stats_after, bam_out_filename, min_frag, max_frag, num_threads, stats, before_bed, after_bed, remove_duplicates, raw_stats_fn, tag, max_sites, only_alts };
 
         {  // this block limits scope of borrows by ap.refer() method
             let mut ap = ArgumentParser::new();
@@ -93,6 +99,9 @@ impl Config {
             ap.refer(&mut conf.remove_duplicates)
                 .add_option(&["--filter_duplicates", "--filtdup", "-r"], StoreTrue,
                 "Filter all marked duplicates from the final bam. (Default: False)");
+            ap.refer(&mut conf.only_alts)
+                .add_option(&["--only_alts", "-A"], StoreTrue,
+                "Filter any read which does not have the alt of interest. (Defaults: traffic-control: False, runway: True)");
             //filters
             ap.refer(&mut conf.mapq)
                 .add_option(&["--mapq"], Store,
@@ -130,6 +139,12 @@ impl Config {
             ap.refer(&mut conf.num_threads)
                 .add_option(&["--threads", "-t"], Store,
                 "Number of threads.");
+            ap.refer(&mut conf.tag)
+                .add_option(&["--keep-tag", "-k"], Store,
+                "Include this tag as an output (requires raw_stats_fn)");
+            ap.refer(&mut conf.max_sites)
+                .add_option(&["--sample-k-sites"], Store,
+                "Randomly downsamples vcfs to k entries");
             ap.parse_args_or_exit();
         }
         conf
@@ -247,6 +262,8 @@ impl Iterator for BAMVCFRecord {
 
     /// returns the current read (as a bam::record::Record), variant (as a VCFRecord), and position of the mutation in the read (usize).
     fn next(&mut self) -> Option<(bam::record::Record, VCFRecord, usize)>{ // We should make this a struct or wrap it in a Box type to get a constant size.
+        // The other approach to this method would be to fetch all the reads at all sites, then remove non-unique reads (or to store the reads and remove duplicates as we go)
+        //   Since we work with a sorted bam, the UniqueRead should be correct.
         let include_softclips = false;
         let include_dels = false;
         loop {
@@ -258,28 +275,31 @@ impl Iterator for BAMVCFRecord {
                         None => { self._advance_vcf_head(); },
                         Some(val) => { 
                             match val { 
-                                    Ok(val) => {
-                                        // we are denoting position in the read as pir
-                                        // some option for including variants that would occur in softmasked regions.
-                                        let pir = match val.cigar().read_pos(vcf_entry.pos, include_softclips, include_dels).expect("Error parsing cigar string"){
-                                            Some(val) => val as usize,
-                                            None => { continue; }
-                                        }; 
-                                       
-                                        let ur = UniqueRead::new(&val);
-                                        if self.read_tracker.contains(&ur) {
-                                            continue;
-                                        } else if val.seq()[pir] != vcf_entry.alt_b {
-                                            continue;
-                                        } else{
-                                            self.read_tracker.insert(UniqueReadItem::UniqueRead(ur));
-                                            return Some((val, vcf_entry.clone(), pir)); 
-                                        }
+                                Ok(val) => {
+                                    //  INSIDE our iterator. how can we move it such that it gets applied post-filter?
+                                    // we are denoting position in the read as pir
+                                    // some option for including variants that would occur in softmasked regions.
+                                    let pir = match val.cigar().read_pos(vcf_entry.pos, include_softclips, include_dels).expect("Error parsing cigar string"){
+                                        Some(val) => val as usize,
+                                        None => { continue; }
+                                    }; 
+                                   
+                                    let ur = UniqueRead::new(&val);
+                                    if self.read_tracker.contains(&ur) {
+                                        continue;
+
+                                    // here is where I would make the change... basically we can either add a flag and use it here
+                                    //      or we can pull this out and apply it as a filter. Filter seems smarter, but I believe
+                                    
+                                    } else{
+                                        self.read_tracker.insert(UniqueReadItem::UniqueRead(ur));
+                                        return Some((val, vcf_entry.clone(), pir)); 
+                                    }
 
 
 
-                                    }, //it may be wise to repack these with all relevant information in addition to bam
-                                    Err(_) => panic!("Error reading bam, godspeed."),
+                                }, //it may be wise to repack these with all relevant information in addition to bam
+                                Err(_) => panic!("Error reading bam, godspeed."),
                             }
                         }
                     }
@@ -289,9 +309,10 @@ impl Iterator for BAMVCFRecord {
     }
 }
 
-/// mrbq returns the mean base quality of the passed `record`
+/// mrbq returns the mean base quality of the passed `record`, beautiful.
 pub fn mrbq(record: &bam::Record) -> f32 {
     let res: u32 = record.qual().into_iter().map( |&x| x as u32 ).sum(); 
+    //return (res as f32) / (record.cigar_len() as f32)
     return (res as f32) / (record.qual().len() as f32)
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "bamreadfilt"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Steven Kothen-Hill <hill2steve@gmail.com>"]
 
 [dependencies]
@@ -8,3 +8,13 @@ rust-htslib = "0.16.0"
 argparse = "0.2.1"
 byteorder = "*"
 rand = "0.4"
+
+[[bin]]
+name = "runway"
+path = "src/main.rs"
+
+[[bin]]
+name = "traffic-control"
+path = "src/mrd.rs"
+
+

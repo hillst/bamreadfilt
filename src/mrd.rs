@@ -8,6 +8,13 @@ use bamreadfilt::Config;
 use bamreadfilt::tuple_to_csv;
 use bamreadfilt::BAMVCFRecord;
 
+//
+// Our MRD tool differs from BRF in one key way:
+//          1) reports all reads at sites, not just sites with an alt (although this can be disabled)
+//          2) using this report, the user can reconstruct overlapping R1/R2 that agree/disagree by using sort!
+
+
+
 fn main() {
     let config = Config::new();
 
@@ -52,7 +59,6 @@ fn mscp_run(config: Config, n_threads: usize){
     };
 
     let mut raw_stats_fd = File::create(config.raw_stats_fn.clone()).unwrap();
-
     
     let mut before_stats = bamreadfilt::SiteStats::new();
     let mut after_stats = bamreadfilt::SiteStats::new();
@@ -130,7 +136,7 @@ fn mscp_run(config: Config, n_threads: usize){
         let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
         for (i, (mut item, _vcf, _pir)) in rx.iter()
             .filter(| &(ref i, v, p)| {
-               i.seq()[p] == v.alt_b 
+                (!config.only_alts) || i.seq()[p] == v.alt_b  // (alt_b && only_alts) => true, (alt_b || not only_alts)
             })
             .map(   | (_i, _v, p) | { 
                 before_stats.collect_stats_stream(&_i, &_v, p); //NOTE this works because it is the consumer, so we have no race conditions at this point
@@ -160,15 +166,7 @@ fn mscp_run(config: Config, n_threads: usize){
                 if config.verbose && i % 1000 == 0 {
                     eprintln!("{} reads processed.", i);
                 }
-                /* Prototype:
-                 *    This approach woudl let us offload the labelling (tumor-normal) to the end user for our usecase
-                        it also would allow more general usage outside of our own.
-                 * 
-                *  if config.label_tag OR for tag in config.tags (????)
-
-                    writeline(...., tag)
-                */
-
+                //for tfrecords
                 item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
                 item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
                 item.push_aux( "B2".as_bytes(), &Aux::Char(_vcf.alt_b) );
@@ -185,9 +183,9 @@ fn mscp_run(config: Config, n_threads: usize){
                             None => {continue;}
                         };
                         let another_test = aux_val.string();
-                    //exact same writeline as before but with the specified tag included as well
+                        //exact same writeline as before but with the specified tag included as well
                         writeln!(raw_stats_fd,"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",  
-                                     std::str::from_utf8(vcf_head.rid2name(_vcf.chrm)).unwrap(), _vcf.pos , _vcf.ref_b as char, _vcf.alt_b as char,  // header info
+                                     std::str::from_utf8(vcf_head.rid2name(_vcf.chrm)).unwrap(), _vcf.pos , _vcf.ref_b as char, item.seq()[_pir] as char,  // header info
                                      std::str::from_utf8( &item.qname()).unwrap(),                 // 
                                      bamreadfilt::mrbq(&item), &item.qual()[_pir] , item.mapq(), _pir, item.insert_size() , item.is_reverse() as i32,
                                      item.is_first_in_template() as i32,
@@ -196,7 +194,7 @@ fn mscp_run(config: Config, n_threads: usize){
                     }
                     else {
                         writeln!(raw_stats_fd,"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",  
-                                     std::str::from_utf8(vcf_head.rid2name(_vcf.chrm)).unwrap(), _vcf.pos , _vcf.ref_b as char, _vcf.alt_b as char,  // header info
+                                     std::str::from_utf8(vcf_head.rid2name(_vcf.chrm)).unwrap(), _vcf.pos , _vcf.ref_b as char, item.seq()[_pir] as char,  // header info
                                      std::str::from_utf8( &item.qname()).unwrap(),                 // 
                                      bamreadfilt::mrbq(&item), &item.qual()[_pir] , item.mapq(), _pir, item.insert_size(), item.is_reverse() as i32,
                                      item.is_first_in_template() as i32,
@@ -211,7 +209,7 @@ fn mscp_run(config: Config, n_threads: usize){
             
 
         eprintln!("Done.");
-        //write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
+        write_statistics(&config.stats, before_stats, after_stats, before_site_stats.len() as u64, after_site_stats.len() as u64).unwrap();
         //let _vp = Path::new(&vcf_filename); 
         //let _vr = rust_htslib::bcf::Reader::from_path(_vp).ok().expect("Error opening vcf.");
         //let vcf_head: rust_htslib::bcf::header::HeaderView = _vr.header().clone(); //jfc
@@ -225,7 +223,6 @@ fn mscp_run(config: Config, n_threads: usize){
         }
 
     });
-    eprintln!("Cleaning up.");
 
     for handle in handles {
         handle.join().unwrap();
@@ -317,9 +314,6 @@ fn run(config: Config){
     {
         if config.verbose && i % 1000 == 0 {
             eprintln!("{} reads processed.", i);
-            //use std::mem::size_of;
-            
-            //println!( "size of {}", size_of::<(bam::record::Record, bamreadfilt::VCFRecord, usize)>() );
         }
         item.push_aux( "B0".as_bytes(), &Aux::Integer(_vcf.pos as i64) );
         item.push_aux( "B1".as_bytes(), &Aux::Char(_vcf.ref_b) );
