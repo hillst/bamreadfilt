@@ -1,6 +1,8 @@
-# bamreadfilt
+# Runway and Traffic Control
 
-Bamreadfilt is a library/software suite for filtering BAM (https://samtools.github.io/) files according to read-specific filters related to variants. 
+Runway and Traffic control are a library/software suite for filtering BAM (https://samtools.github.io/) files according to read-specific filters related to variants. 
+traffic-control was designed for re-analyzing genotypes by fetching all reads which map to particular variants.
+runway was designed for analyzing mutations. This is done by fetching reads which harbor a specific alternate base (alt).
 
 ## Design goals
 
@@ -14,17 +16,20 @@ We are building this tool so there is a standard application and commandline int
 
 ## Building
 
+Built with cargo 0.23.0-nightly (e447ac7e9 2017-09-27)
+
 ```bash
 git clone <thisrepo>
 cd bamreadfilt/
 cargo build --release
+target/release/runway --help
 ```
 ## Usage
 
 The most basic usecase of bam read filt is to filter a bam for *only* reads that contain a variant of interest. Each use of bamreadfilt requires two things, a bam to be filtered, and a vcf/bed containing variants of interest. 
 
 ```bash
-./bamreadfilt --bam test.bam --vcf test.vcf
+./runway -t 2 --bam test.bam --vcf test.vcf
 ```
 
 That's it! Two files are written:
@@ -36,44 +41,26 @@ That's it! Two files are written:
 
 ## Filtering by thresholds
 
-In the default case, brf (bamreadfilt) filters for reads that contain a target variation. However, we also have several additional methods to use when filtering our bam. These are:
+In the default case, runway (formerly bamreadfilt) filters for reads that contain a target variation. However, we also have several additional methods to use when filtering our bam. Use --help
+to see a complete list of filtering criterias.
 
-```
-  --mapq MAPQ           Minimum MAPQ to keep read
-  --vbq VBQ             Minimum base-quality (Phred 33) score at the position
-                        of the variant to include a read.
-  --mrbq MRBQ           Minimum read base quality to include a read. Computes
-                        the mean of the full read, not just the mapped portion
-                        of the read.
-  --min_pir MIN_PIR     Minimum position of the variant in the read to include
-                        the read.
-  --max_pir MAX_PIR     Maximum fragment size of the read if paired.
-  --min_frag MIN_FRAG   Minimum fragment size of the read if paired.
-  --max_frag MAX_FRAG   Maximum position of the variant in the read to include
-                        the read.
- ```
-Each one of these filters applies an additional filter to the resulting bam. 
-
-For instance, if a user wants to filter by variant base quality >= 20 and MAPQ >= 40, you would use:
+For instance, if a user wants to filter by variant base quality >= 20 and MAPQ >= 40, and only variants that occur in the first 150 bases you would use:
 
 ```bash
-./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20
+./runway --bam test.bam --vcf test.vcf --mapq 40 --vbq 20 --max_pir 150
 ```
 
 The result would be written to test/new_out.bam and stats.txt respectively. Unfortunately however, the resulting bam is not sorted (and not indexed!), to receive a sorted bam you can write to standard out with the --stdout flag. Unfortunately using this with samtools sort  **does not play work** with a limited amount of system memory. Avoid using --stdout to sort your result.
 
-While the tool works great for bam/vcf pairs, there is no way currently to process more than one bam at a time. This could lead to frustration when collecting statistics. Fortunately there is a flag for a custom statistics file!
-
+Runway also allows users to collect statistics about each variant after filtering.
 ```bash
-./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20  --stats mystats.txt 
+./runway --bam test.bam --vcf test.vcf --mapq 40 --vbq 20  --stats mystats.txt 
 ```
-
-Now results are written to mystats.txt instead of to the default stats.txt.
 
 ## Multithreading
 
-To use bamreadfilt with threads, simply add the -t argument specifying a number of threads. The filters are not distributed and we are *guaranteed* there is no race condition when computing the statistics.
+Runway and traffic-control only will execute with threads, by default we use 2 threads, but more can be specified. The example below executes runway with 8 threads.
 
 ```bash 
-./bamreadfilt --bam test.bam --vcf test.vcf --mapq 40 --vbq 20  -t 8 
+./runway --bam test.bam --vcf test.vcf --mapq 40 --vbq 20  -t 8 
 ```
