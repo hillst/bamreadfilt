@@ -1,7 +1,6 @@
 extern crate bamreadfilt;
 extern crate byteorder;
 extern crate rust_htslib;
-extern crate rand;
 
 use std::collections::HashSet;
 use bamreadfilt::Config;
@@ -33,7 +32,6 @@ fn mscp_run(config: Config, n_threads: usize){
     use rust_htslib::bam::record::Aux;
     use std::io::Write;
     use std::fs::File;
-    use rand::sample;
     
     let bam_filename = config.bam_filename.clone();
     let vcf_filename= config.vcf_filename.clone();
@@ -85,8 +83,8 @@ fn mscp_run(config: Config, n_threads: usize){
 
     if config.max_sites > 0 && config.max_sites < master_list.len() as i64 {
         eprintln!("Max Sites: {}  Total Sites: {}", config.max_sites, master_list.len() as i64);
-        let mut rng = rand::thread_rng();
-        master_list = sample(&mut rng, master_list, config.max_sites as usize);
+        //master_list = master_list.head(config.max_sites as usize);
+        master_list.truncate(config.max_sites as usize);
     }
         
 

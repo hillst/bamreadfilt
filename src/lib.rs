@@ -1,8 +1,3 @@
-#![feature(test)]
-#![feature(rand)]
-
-extern crate test;
-extern crate rand;
 extern crate byteorder;
 extern crate rust_htslib;
 extern crate argparse;
@@ -593,13 +588,11 @@ mod tests {
     }
 
     #[test]
-    fn running_average_update_rand() {
-        use rand::Rng;
+    fn running_average_update_range() {
 
         let mut ra = RunningAverage::new();
-        let mut rng = rand::thread_rng();
         for i in 0..1000000 {
-            ra.update(rng.gen::<u32>() as f64);
+            ra.update(i);
         }
         let (mean, var) = match ra.finalize(){
             Some((m, v)) => (m, v),

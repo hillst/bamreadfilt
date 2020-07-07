@@ -4,7 +4,9 @@ version = "0.1.1"
 authors = ["Steven Kothen-Hill <hill2steve@gmail.com>"]
 
 [dependencies]
-rust-htslib = "0.16.0"
+rust-htslib = { version = "*", default-features = false }
+
+
 argparse = "0.2.1"
 byteorder = "*"
 rand = "0.4"
